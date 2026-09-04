@@ -1105,3 +1105,71 @@ Opened the project from the **Projects** tab:
   prunes `component_metadata`.
 - Recommendation if this grows past the prototype: move to Postgres plus object storage with
   presigned uploads, at which point range requests and chunked/resumable uploads come mostly for free.
+
+### Stage 9 follow-up — the three infrastructure gaps, closed
+
+The items flagged at the end of Stage 9, now done rather than deferred.
+
+#### 1. Range requests on `GET /media/:id`
+
+Was `accept-ranges: none`, so seeking a clip re-downloaded it and a `<video>` element could not
+start until the whole file had arrived. `parseByteRange()` handles the single-range forms and the
+route answers `206` with `content-range`; unparseable headers fall back to the whole file, per RFC
+9110. Verified against a 257,560-byte clip:
+
+| `Range` | response | body |
+|---|---|---|
+| *(none)* | `200`, `accept-ranges: bytes` | 257,560 B |
+| `bytes=0-99` | `206`, `content-range: bytes 0-99/257560` | 100 B |
+| `bytes=-50` (suffix) | `206`, `bytes 257510-257559/257560` | 50 B |
+| `bytes=257500-` (open-ended) | `206`, `bytes 257500-257559/257560` | 60 B |
+| `bytes=999999999-` | **`416`**, `content-range: bytes */257560` | error JSON |
+| `bytes=abc` (malformed) | `200` (ignored) | 257,560 B |
+
+One wrinkle worth remembering: the 416 body first came back as a `500`
+(`Attempted to send payload of invalid type 'object'`) because the media `content-type` had already
+been set on the reply, so Fastify refused to serialise a JSON error. The range is now parsed *before*
+any media header is set.
+
+#### 2. Optimistic-concurrency guard on `PUT /projects/:id`
+
+The body accepts an optional `expectedUpdatedAt`. If it does not match the row's current
+`updated_at`, the save is refused with `409` and both timestamps; omitting the field keeps the old
+last-write-wins behaviour, so nothing else had to change. Verified end to end:
+
+```
+PUT (create)                    -> updatedAt 1788542698930
+PUT with expectedUpdatedAt=…930 -> 200, updatedAt 1788542700056
+PUT with the STALE …930 again   -> 409 {serverUpdatedAt: …056, yourUpdatedAt: …930}
+GET                             -> stored v = 2   (the v=3 write was refused, nothing clobbered)
+```
+
+The editor now uses it. The Projects panel remembers the `updatedAt` it last saw (set on open and
+after each save) and sends it with every save. On `409` it shows a banner — "The server copy changed
+at 7:27:56 PM; you opened the one from 6:37:54 PM. There is no merge — pick one." — with
+**Overwrite theirs** (re-saves unguarded) and **Load theirs (discards mine)**. Verified by simulating
+a second user with a `curl` save between opening and saving: the banner appeared, Overwrite restored
+the local copy on the server, and the banner cleared.
+
+This is still not a merge. It just makes the clobber deliberate instead of silent.
+
+#### 3. Orphan sweep
+
+`POST /media/sweep`, and automatically after `DELETE /projects/:id`. A media row is an orphan when its
+id appears in no surviving project's stored JSON — a substring test, which errs toward keeping files
+rather than deleting live ones. Sweeping removes the row, its `component_metadata` and the file.
+Verified: two genuine orphans (a duplicate footage upload from the CORS-failure retry, and the
+smoke-test media) were removed, the two media referenced by the saved project were kept,
+`component_metadata` went 2 rows -> 1, and both orphan files disappeared from `storage/media/`.
+A later `DELETE` of a project whose media was still referenced elsewhere reported
+`orphanedMediaRemoved: []`, as it should.
+
+#### Still deferred
+
+- **No authentication or access control** — unchanged, and the reason the conflict guard is
+  identity-free (it compares timestamps, not users).
+- **Uploads are still whole-file and not resumable**, with no progress in the UI. The 2 GB ceiling
+  stands.
+- **No pruning of rendered files** in `storage/rendered/` — the sweep covers uploaded media only.
+- Range support does not extend to `GET /files/:name.webm` (the render-service output route), only to
+  `/media/:id`.

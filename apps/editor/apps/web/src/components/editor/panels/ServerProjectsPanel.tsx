@@ -6,6 +6,7 @@ import {
   fetchServerMedia,
   listServerProjects,
   loadServerProject,
+  ProjectConflictError,
   saveServerProject,
   type ProjectSummary,
 } from "../../../services/server-storage";
@@ -31,6 +32,13 @@ export const ServerProjectsPanel: React.FC = () => {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /**
+   * The `updatedAt` this session last saw for the open project. Sent as an
+   * optimistic-concurrency guard so a save cannot silently clobber someone else's newer
+   * one; `null` means "no baseline", which saves unguarded.
+   */
+  const [knownUpdatedAt, setKnownUpdatedAt] = useState<number | null>(null);
+  const [conflict, setConflict] = useState<ProjectConflictError | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -46,24 +54,37 @@ export const ServerProjectsPanel: React.FC = () => {
     void refresh();
   }, [refresh]);
 
-  const handleSave = useCallback(async () => {
-    setBusy("Saving…");
-    setError(null);
-    try {
-      // getFullProject() merges in text/shape/SVG/sticker clips, which live in the
-      // engines rather than the store (see Stage 1 notes).
-      const full = getFullProject();
-      await saveServerProject(full);
-      toast.success("Project saved to the server", full.name);
-      await refresh();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      setError(message);
-      toast.error("Could not save to the server", message);
-    } finally {
-      setBusy(null);
-    }
-  }, [getFullProject, refresh]);
+  const handleSave = useCallback(
+    async (force = false) => {
+      setBusy("Saving…");
+      setError(null);
+      try {
+        // getFullProject() merges in text/shape/SVG/sticker clips, which live in the
+        // engines rather than the store (see Stage 1 notes).
+        const full = getFullProject();
+        const result = await saveServerProject(full, force ? null : knownUpdatedAt);
+        setKnownUpdatedAt(result.updatedAt);
+        setConflict(null);
+        toast.success("Project saved to the server", full.name);
+        await refresh();
+      } catch (err) {
+        if (err instanceof ProjectConflictError) {
+          setConflict(err);
+          toast.error(
+            "Someone else saved this project",
+            "Reload theirs, or overwrite it from the panel.",
+          );
+        } else {
+          const message = err instanceof Error ? err.message : "Unknown error";
+          setError(message);
+          toast.error("Could not save to the server", message);
+        }
+      } finally {
+        setBusy(null);
+      }
+    },
+    [getFullProject, knownUpdatedAt, refresh],
+  );
 
   const handleOpen = useCallback(
     async (summary: ProjectSummary) => {
@@ -92,6 +113,8 @@ export const ServerProjectsPanel: React.FC = () => {
 
         const missing = items.filter((item) => item.isPlaceholder).length;
         loadProject({ ...incoming, mediaLibrary: { items } });
+        setKnownUpdatedAt(record.updatedAt);
+        setConflict(null);
         await refreshRegistry();
 
         toast.success(
@@ -123,7 +146,7 @@ export const ServerProjectsPanel: React.FC = () => {
           type="button"
           aria-label="Save project to server"
           disabled={busy !== null}
-          onClick={() => void handleSave()}
+          onClick={() => void handleSave(false)}
           className={`flex-1 rounded-lg px-3 py-2 text-[13px] font-semibold ${
             busy ? "bg-bg-2 text-fg-muted" : "bg-accent text-white"
           }`}
@@ -149,6 +172,43 @@ export const ServerProjectsPanel: React.FC = () => {
         <p className="mt-3 break-words text-[11px] text-red-400" role="alert">
           {error}
         </p>
+      )}
+
+      {conflict && (
+        <div
+          className="mt-3 rounded-lg border border-amber-500/60 bg-amber-500/10 p-3"
+          role="alert"
+        >
+          <p className="text-[12px] font-semibold text-fg">Someone else saved this project</p>
+          <p className="mt-0.5 text-[11px] leading-snug text-fg-muted">
+            The server copy changed at{" "}
+            {new Date(conflict.serverUpdatedAt).toLocaleTimeString()}; you opened the one from{" "}
+            {new Date(conflict.yourUpdatedAt).toLocaleTimeString()}. There is no merge — pick one.
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              aria-label="Overwrite the server copy"
+              disabled={busy !== null}
+              onClick={() => void handleSave(true)}
+              className="rounded-md bg-amber-500 px-2.5 py-1 text-[11px] font-semibold text-black"
+            >
+              Overwrite theirs
+            </button>
+            <button
+              type="button"
+              aria-label="Discard my changes and reload the server copy"
+              disabled={busy !== null}
+              onClick={() => {
+                const summary = projects?.find((item) => item.id === project.id);
+                if (summary) void handleOpen(summary);
+              }}
+              className="rounded-md border border-border/70 px-2.5 py-1 text-[11px] font-medium text-fg-muted"
+            >
+              Load theirs (discards mine)
+            </button>
+          </div>
+        </div>
       )}
 
       <div className="mt-4 border-t border-border/70 pt-3">

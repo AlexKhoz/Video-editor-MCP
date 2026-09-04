@@ -29,6 +29,12 @@ ffmpeg for tens of seconds, and the API must stay responsive.
 | `GET`/`POST` | `/media`, `/media/:id` | media bytes; upload is raw `application/octet-stream` with `x-filename` / `x-media-id` / `x-mime-type` headers, streamed to disk |
 | `GET`/`POST` | `/component-metadata`, `/component-metadata/:mediaId` | mediaId -> componentId + props + background + renderedFileId |
 
+`GET /media/:id` supports byte ranges (`206` + `content-range`, `416` when unsatisfiable), so seeking
+a clip does not re-download it. `PUT /projects/:id` accepts an optional `expectedUpdatedAt` and
+answers `409` rather than overwriting a newer save. `POST /media/sweep` (also run after
+`DELETE /projects/:id`) deletes media, files and component metadata that no surviving project
+references.
+
 Storage lives in SQLite (`storage/video-editor.sqlite`, via Node's built-in `node:sqlite`) with media
 bytes under `storage/media/`. **There is no authentication** — every project is readable and writable
 by anyone who can reach the service, and concurrent edits are last-save-wins. See NOTES.md.

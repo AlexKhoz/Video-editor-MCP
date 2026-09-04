@@ -6,10 +6,13 @@ import { randomUUID } from "node:crypto";
 
 import { config } from "./config.js";
 import {
+  deleteMediaRow,
   deleteProject,
+  findOrphanedMedia,
   getComponentMetadata,
   getMedia,
   getProject,
+  getProjectUpdatedAt,
   insertMedia,
   listComponentMetadata,
   listMedia,
@@ -19,6 +22,56 @@ import {
 } from "./db.js";
 
 const SAFE_EXT = /^\.[A-Za-z0-9]{1,8}$/;
+
+/**
+ * Parses a single-range `Range: bytes=…` header.
+ *
+ * Returns `null` for no/unsupported range header (serve the whole file), `"invalid"` when
+ * the range cannot be satisfied (416), or the resolved `{ start, end }` inclusive offsets.
+ * Multi-range requests are deliberately treated as "serve the whole file" — browsers only
+ * use them for byte-serving PDFs, never for media playback.
+ */
+export function parseByteRange(header, size) {
+  if (typeof header !== "string") return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return null;
+
+  const [, rawStart, rawEnd] = match;
+  if (rawStart === "" && rawEnd === "") return "invalid";
+
+  let start;
+  let end;
+  if (rawStart === "") {
+    // Suffix form: "bytes=-500" means the last 500 bytes.
+    const suffix = Number(rawEnd);
+    if (suffix === 0) return "invalid";
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(rawStart);
+    end = rawEnd === "" ? size - 1 : Math.min(Number(rawEnd), size - 1);
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return "invalid";
+  if (start > end || start >= size) return "invalid";
+  return { start, end };
+}
+
+/**
+ * Deletes media (row, file and component metadata) that no surviving project references.
+ * Returns the ids removed.
+ */
+async function sweepOrphanedMedia() {
+  const removed = [];
+  for (const id of findOrphanedMedia()) {
+    const storagePath = deleteMediaRow(id);
+    if (storagePath) {
+      await fs.rm(storagePath, { force: true });
+    }
+    removed.push(id);
+  }
+  return removed;
+}
 
 /**
  * Server-side storage routes: projects, media bytes and component metadata.
@@ -61,10 +114,25 @@ export async function registerStorageRoutes(app) {
   });
 
   app.put("/projects/:id", async (request, reply) => {
-    const { name, project } = request.body ?? {};
+    const { name, project, expectedUpdatedAt } = request.body ?? {};
     if (!project || typeof project !== "object") {
       return reply.code(400).send({ error: "project (object) is required" });
     }
+
+    // Optional optimistic-concurrency guard. Clients that pass the `updatedAt` they last
+    // saw get a 409 instead of silently overwriting someone else's newer save; clients
+    // that omit it keep the old last-write-wins behaviour.
+    if (expectedUpdatedAt !== undefined && expectedUpdatedAt !== null) {
+      const current = getProjectUpdatedAt(request.params.id);
+      if (current !== null && current !== Number(expectedUpdatedAt)) {
+        return reply.code(409).send({
+          error: "Project changed on the server since you loaded it",
+          serverUpdatedAt: current,
+          yourUpdatedAt: Number(expectedUpdatedAt),
+        });
+      }
+    }
+
     const projectName =
       typeof name === "string" && name ? name : (project.name ?? "Untitled");
     return upsertProject({ id: request.params.id, name: projectName, project });
@@ -74,8 +142,13 @@ export async function registerStorageRoutes(app) {
     if (!deleteProject(request.params.id)) {
       return reply.code(404).send({ error: "Unknown project" });
     }
-    return { deleted: request.params.id };
+    // Sweep media no surviving project references, plus its component metadata.
+    const removed = await sweepOrphanedMedia();
+    return { deleted: request.params.id, orphanedMediaRemoved: removed };
   });
+
+  /** Explicit sweep, for when media was orphaned by editing rather than deleting. */
+  app.post("/media/sweep", async () => ({ orphanedMediaRemoved: await sweepOrphanedMedia() }));
 
   /* ----------------------------------------------------------------- media */
 
@@ -134,10 +207,32 @@ export async function registerStorageRoutes(app) {
       return reply.code(410).send({ error: "Media row exists but the file is gone" });
     }
 
+    // Range support matters for video: without it, seeking re-downloads the whole file,
+    // and <video> elements cannot start playing until the entire clip has arrived.
+    // Parsed before the media content-type is set, because the 416 body is JSON and
+    // Fastify refuses to serialise an object once the type says video/*.
+    const range = parseByteRange(request.headers.range, stat.size);
+
+    if (range === "invalid") {
+      reply.header("content-range", `bytes */${stat.size}`);
+      reply.header("accept-ranges", "bytes");
+      return reply.code(416).send({ error: "Requested range not satisfiable" });
+    }
+
     reply.header("content-type", record.mimeType);
-    reply.header("content-length", stat.size);
-    reply.header("accept-ranges", "none");
+    reply.header("accept-ranges", "bytes");
     reply.header("x-filename", record.filename);
+
+    if (range) {
+      reply.code(206);
+      reply.header("content-range", `bytes ${range.start}-${range.end}/${stat.size}`);
+      reply.header("content-length", range.end - range.start + 1);
+      return reply.send(
+        createReadStream(record.storagePath, { start: range.start, end: range.end }),
+      );
+    }
+
+    reply.header("content-length", stat.size);
     return reply.send(createReadStream(record.storagePath));
   });
 

@@ -107,6 +107,35 @@ export function deleteProject(id) {
   return result.changes > 0;
 }
 
+/** The row's `updated_at`, for optimistic-concurrency checks. `null` when absent. */
+export function getProjectUpdatedAt(id) {
+  const row = getDb().prepare("SELECT updated_at FROM projects WHERE id = ?").get(id);
+  return row ? row.updated_at : null;
+}
+
+/**
+ * Media ids that no surviving project's JSON mentions.
+ *
+ * A substring match on the stored JSON is crude but safe in the direction that matters:
+ * an id that appears anywhere in any project is treated as still referenced, so this
+ * never deletes media that is in use. Worst case it keeps something too long.
+ */
+export function findOrphanedMedia() {
+  const db = getDb();
+  const projects = db.prepare("SELECT data FROM projects").all().map((row) => row.data);
+  const mediaIds = db.prepare("SELECT id FROM media").all().map((row) => row.id);
+  return mediaIds.filter((id) => !projects.some((data) => data.includes(id)));
+}
+
+/** Removes a media row and its component metadata. The file itself is the caller's job. */
+export function deleteMediaRow(id) {
+  const db = getDb();
+  const row = db.prepare("SELECT storage_path FROM media WHERE id = ?").get(id);
+  db.prepare("DELETE FROM component_metadata WHERE media_id = ?").run(id);
+  const result = db.prepare("DELETE FROM media WHERE id = ?").run(id);
+  return result.changes > 0 ? (row?.storage_path ?? null) : null;
+}
+
 /* ------------------------------------------------------------------- media */
 
 export function insertMedia({ id, filename, storagePath, mimeType, size }) {

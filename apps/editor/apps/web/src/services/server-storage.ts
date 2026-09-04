@@ -32,6 +32,19 @@ export interface ComponentMetadataEntry {
   updatedAt: number;
 }
 
+/** Thrown when a save would overwrite a newer version on the server. */
+export class ProjectConflictError extends Error {
+  readonly serverUpdatedAt: number;
+  readonly yourUpdatedAt: number;
+
+  constructor(serverUpdatedAt: number, yourUpdatedAt: number) {
+    super("The project changed on the server since you opened it");
+    this.name = "ProjectConflictError";
+    this.serverUpdatedAt = serverUpdatedAt;
+    this.yourUpdatedAt = yourUpdatedAt;
+  }
+}
+
 export interface UploadedMedia {
   id: string;
   filename: string;
@@ -82,13 +95,30 @@ export async function loadServerProject(
  * own autosave serialiser, which drops `blob`, `fileHandle`, `waveformData` and
  * session-local `blob:` thumbnail URLs.
  */
-export async function saveServerProject(project: Project): Promise<{ updatedAt: number }> {
+export async function saveServerProject(
+  project: Project,
+  expectedUpdatedAt?: number | null,
+): Promise<{ updatedAt: number }> {
   const stripped = JSON.parse(serializeProjectForAutoSave(project)) as Project;
   const response = await fetch(`${BASE}/projects/${encodeURIComponent(project.id)}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: project.name, project: stripped }),
+    body: JSON.stringify({
+      name: project.name,
+      project: stripped,
+      // Omitted (or null) means "overwrite regardless", which is the old behaviour.
+      ...(expectedUpdatedAt != null ? { expectedUpdatedAt } : {}),
+    }),
   });
+
+  if (response.status === 409) {
+    const body = (await response.json()) as {
+      serverUpdatedAt: number;
+      yourUpdatedAt: number;
+    };
+    throw new ProjectConflictError(body.serverUpdatedAt, body.yourUpdatedAt);
+  }
+
   return asJson(response, "Saving project");
 }
 
