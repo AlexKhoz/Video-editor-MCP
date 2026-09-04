@@ -585,6 +585,23 @@ All optional env vars: `PORT` (3001), `HOST` (127.0.0.1), `REDIS_HOST`, `REDIS_P
 `RENDER_STORAGE_DIR`, `COMPONENT_LIBRARY_DIR`, `WORKER_CONCURRENCY`, `RENDER_TIMEOUT_MS`,
 `RENDER_FPS`, `RENDER_WIDTH`, `RENDER_HEIGHT`, `LOG_LEVEL`.
 
+### Three snags worth remembering (all fixed)
+
+1. **`node --test test/` does not work here.** With a directory argument Node 22.14 on Windows tried
+   to `require` the directory as a module and died with `MODULE_NOT_FOUND: ...	est`. The script is
+   now `node --test test/*.test.js`.
+2. **BullMQ 6 made `ioredis` an optional dependency.** Without it both server and worker threw
+   `BullMQ could not load the optional 'ioredis' package` at import time, so the server never listened.
+   `ioredis` (MIT) is now an explicit dependency.
+3. **BullMQ 6 removed `queue.client`.** It resolves to `undefined` (the raw Redis client moved behind
+   the backend abstraction, per `queue-base.d.ts`), so the old `queue.client.ping()` health check always
+   reported Redis down. Readiness is now `queue.waitUntilReady()` raced against a 2s timeout, because it
+   otherwise hangs while ioredis retries.
+
+Also: killing a test run with Ctrl+C (or a task kill) leaves the spawned server and worker alive, and
+the next run then fails with `EADDRINUSE 127.0.0.1:3199`. The test now checks the port is free up
+front and reports a dead child's exit code, instead of blaming it on an unhealthy service.
+
 ### Test
 
 `npm test` in `apps/render-service` (node:test): lists the catalogue and asserts every param type is
@@ -593,3 +610,8 @@ specific messages), then renders `animated-text` with custom text through the re
 `/render/:jobId` until it settles — and asserts the file exists, is non-empty, matches the reported
 byte count, downloads over HTTP as `video/webm`, and starts with WebM's EBML magic bytes
 (`1A 45 DF A3`). Requires Redis, ffmpeg and Chrome.
+
+Result: **5/5 passing, exit 0, ~7.7s** end to end (`processing -> done`; `pending` is usually too brief
+to observe). The rendered file was `102,273 bytes, 40 frames`, and `ffprobe` confirms the file the API
+produced still carries alpha: `vp9,1920,1080` with `alpha_mode=1`. `KEEP_TEST_OUTPUT=1` keeps it for
+inspection.

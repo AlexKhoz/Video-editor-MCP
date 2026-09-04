@@ -25,8 +25,16 @@ app.addHook("onRequest", async (request, reply) => {
 app.get("/health", async (_request, reply) => {
   let redis = "down";
   try {
-    const client = await queue.client;
-    redis = (await client?.ping()) === "PONG" ? "up" : "down";
+    // BullMQ 6 no longer exposes a raw client (`queue.client` is gone — the connection
+    // lives behind the backend), so readiness is the connection check. It can hang while
+    // ioredis retries, hence the race.
+    await Promise.race([
+      queue.waitUntilReady(),
+      new Promise((_resolve, reject) =>
+        setTimeout(() => reject(new Error("redis readiness timed out")), 2000),
+      ),
+    ]);
+    redis = "up";
   } catch {
     redis = "down";
   }

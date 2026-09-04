@@ -25,6 +25,8 @@ let server;
 let worker;
 let renderedFile;
 
+const children = [];
+
 function spawnService(entry) {
   const child = spawn(process.execPath, [path.join(config.serviceRoot, "src", entry)], {
     cwd: config.serviceRoot,
@@ -33,7 +35,31 @@ function spawnService(entry) {
   });
   child.stdout.on("data", (chunk) => process.stdout.write(`[${entry}] ${chunk}`));
   child.stderr.on("data", (chunk) => process.stderr.write(`[${entry}] ${chunk}`));
+  // Remember why a child died so a startup failure reports itself instead of
+  // showing up later as a vague "did not become healthy".
+  child.on("exit", (code, signal) => {
+    if (code !== 0 && !signal) child.exitError = `${entry} exited with code ${code}`;
+  });
+  children.push({ entry, child });
   return child;
+}
+
+function deadChild() {
+  return children.find(({ child }) => child.exitCode !== null && child.exitCode !== 0);
+}
+
+async function portIsFree() {
+  return new Promise((resolve) => {
+    const probe = net.createConnection({ host: "127.0.0.1", port: PORT });
+    probe.setTimeout(1000);
+    const done = (free) => {
+      probe.destroy();
+      resolve(free);
+    };
+    probe.on("connect", () => done(false));
+    probe.on("error", () => done(true));
+    probe.on("timeout", () => done(true));
+  });
 }
 
 async function redisReachable() {
@@ -51,16 +77,26 @@ async function redisReachable() {
 }
 
 async function waitForHealth(attempts = 40) {
+  let lastBody = null;
   for (let i = 0; i < attempts; i += 1) {
+    const dead = deadChild();
+    if (dead) {
+      throw new Error(
+        `${dead.child.exitError ?? `${dead.entry} exited`} — see its output above for the cause`,
+      );
+    }
     try {
       const response = await fetch(`${BASE}/health`);
-      if (response.ok) return await response.json();
+      lastBody = await response.json();
+      if (response.ok) return lastBody;
     } catch {
       // server still starting
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error("render-service did not become healthy");
+  throw new Error(
+    `render-service did not become healthy${lastBody ? `; last /health said ${JSON.stringify(lastBody)}` : ""}`,
+  );
 }
 
 before(async () => {
@@ -68,6 +104,11 @@ before(async () => {
     await redisReachable(),
     `Redis is not reachable at ${config.redis.host}:${config.redis.port}. ` +
       `Start it with: docker compose -f infra/docker-compose.yml up -d`,
+  );
+  assert.ok(
+    await portIsFree(),
+    `Port ${PORT} is already in use — a server from an earlier run is probably still alive. ` +
+      `Kill it, or set TEST_PORT to something else.`,
   );
   server = spawnService("server.js");
   worker = spawnService("worker.js");
