@@ -14,7 +14,7 @@ import { redisConnection } from "./queue.js";
  * image-sequence exporter + ffmpeg to VP9/yuva420p). Deliberately shelled out rather
  * than reimplemented: that script is already proven to produce a correct alpha channel.
  */
-function runRenderScript({ componentId, props, out, fps, width, height }) {
+function runRenderScript({ componentId, props, out, fps, width, height, background }) {
   return new Promise((resolve, reject) => {
     const args = [
       renderScript,
@@ -30,6 +30,7 @@ function runRenderScript({ componentId, props, out, fps, width, height }) {
       String(width),
       "--height",
       String(height),
+      ...(background ? ["--background", background] : []),
     ];
 
     const child = spawn(process.execPath, args, {
@@ -73,7 +74,7 @@ function parseFrameCount(stdout) {
 const worker = new Worker(
   config.queueName,
   async (job) => {
-    const { componentId, props, fps, width, height, durationInSeconds } = job.data;
+    const { componentId, props, fps, width, height, durationInSeconds, background } = job.data;
 
     const meta = await getComponent(componentId);
     if (!meta) {
@@ -92,6 +93,7 @@ const worker = new Worker(
       fps,
       width,
       height,
+      background,
     });
     await job.updateProgress(95);
 
@@ -107,6 +109,7 @@ const worker = new Worker(
       bytes: stat.size,
       frames: parseFrameCount(stdout),
       durationInSeconds,
+      background: background ?? null,
     };
   },
   {

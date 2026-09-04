@@ -615,3 +615,72 @@ Result: **5/5 passing, exit 0, ~7.7s** end to end (`processing -> done`; `pendin
 to observe). The rendered file was `102,273 bytes, 40 frames`, and `ffprobe` confirms the file the API
 produced still carries alpha: `vp9,1920,1080` with `alpha_mode=1`. `KEEP_TEST_OUTPUT=1` keeps it for
 inspection.
+
+## Stage 4 — Component Library panel in OpenReel
+
+Alpha decision for this stage: **chroma key (option 2)**, not patching the decode path. No
+core-engine changes, works today, and gives a real visual overlay. Patching WebCodecs for
+`alpha_mode=1` stays a post-Stage-6 follow-up.
+
+### Chroma-key rendering
+
+`scripts/render.mjs` gained `--background <hex>`; the transparent mode is untouched and still the
+default. With a background the harness passes it to Motion Canvas as the stage `background` (instead
+of `null`), and ffmpeg encodes `yuv420p` rather than `yuva420p` — the alpha plane is pointless once
+the frames carry a backdrop, and the file is smaller (39 KB vs 102 KB for a comparable clip).
+
+`#00ff00` is not arbitrary: it matches OpenReel's own chroma default, `keyColor { r: 0, g: 1, b: 0 }`
+(`GreenScreenSection.tsx:124`). Verified on a rendered frame — background exactly `(0,255,0)`,
+glyphs `(255,255,255)`.
+
+`POST /render` takes an optional `background` (validated as hex), threads it through the job to the
+worker's `--background`, and echoes it on the job status. The panel always asks for `#00ff00`.
+
+### The panel
+
+`apps/editor/apps/web/src/components/editor/panels/ComponentLibraryPanel.tsx`, wired into
+`AssetsPanel.tsx` at exactly the four points mapped in Stage 1: the `AssetsTab` union, `ASSETS_TABS`,
+`TAB_ICONS` (added `Boxes`), and the `renderSectionContent` switch. Nothing else in that file changed.
+`tsc --noEmit` on `@openreel/web` is clean.
+
+Flow: `GET /components` -> card grid -> form generated from the param schema (`text`/`media` -> text
+input, `color` -> colour picker, `number` -> range + readout, `boolean` -> checkbox) -> **Generate**
+-> `POST /render` -> poll `GET /render/:jobId` once a second -> download the file -> hand it to the
+store's existing `importMedia(file)`. Button text tracks the phase (Queued / Rendering N% / Adding to
+media), errors surface inline and as a toast, and if the service is unreachable the panel says so and
+offers Retry plus the commands to start it. Service URL overridable with `VITE_RENDER_SERVICE_URL`
+(default `http://127.0.0.1:3001`).
+
+### Manual test — works end to end
+
+Generated `animated-text` with the text "Stage 4 works" from the panel: job 3 rendered in ~20s and
+landed in the media library as `animated-text-Stage 4 works.webm` (75,415 bytes, 00:02), behaving like
+any other clip. Placed it on **Video 1** (the top layer) with a blue-to-pink gradient clip on
+**Video 2** underneath, then applied Chroma Key.
+
+Measured from OpenReel's own MP4 export, sampling the centre row of the frame:
+
+| time | what is live | green px | white px | background pixel |
+|---|---|---|---|---|
+| 1.0s, before keying | both clips | 1467 | 405 | `(0,255,1)` — green covers the layer below |
+| 1.0s, after keying | both clips | **0** | 438 | `(233,62,119)` — the gradient shows through |
+| 4.0s, after keying | gradient only | 0 | 0 | `(233,62,119)` |
+
+The editor's live preview agrees: white "Stage 4 works" over the gradient, no green anywhere, no
+visible fringing at preview scale.
+
+### Two things about OpenReel's chroma-key UI
+
+1. **The Green Screen section's Enable switch does not affect rendering.** `handleToggleEnabled`
+   (`GreenScreenSection.tsx:141`) only mutates the in-memory `ChromaKeyEngine` and bumps
+   `project.modifiedAt`; unlike the colour/tolerance handlers it never dispatches
+   `clip/setChromaKey`, so `clip.chromaKey` stays undefined and the export is unaffected. Toggling it
+   changed nothing in the output — confirmed by exporting and sampling pixels.
+2. **The path that works is the Chroma Key *effect*.** Select the clip, open Effects, and
+   **double-click** the "Chroma Key" card (its own label says "or double-click to apply to selected
+   clip"). That writes `clip.effects[] = [{ type: "chromaKey", enabled: true, params: {} }]`, which the
+   render path honours. Default params key out green at 30% tolerance — good enough as-is.
+
+For Stage 5/6 automation: the inspector accordions are `div[role="button"]`, not `<button>` elements,
+so `querySelectorAll("button")` misses them entirely — select by `aria-label` instead
+(`Expand … section` / `Collapse … section`).

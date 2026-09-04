@@ -3,7 +3,7 @@ import {
   Image as ImageIcon, Film, Music, Plus, Upload, Trash2,
   Square, Circle, Triangle, Star, ArrowRight, Hexagon, FileCode, AlertTriangle,
   RefreshCw, Palette, Sparkles, Video,
-  Type, Shapes, Wand2, LayoutTemplate, Zap, Shuffle,
+  Type, Shapes, Wand2, LayoutTemplate, Zap, Shuffle, Boxes,
 } from "@/icons/lucide-compat";
 import {
   BACKGROUND_PRESETS,
@@ -19,6 +19,7 @@ import { AspectRatioMatchDialog } from "./dialogs/AspectRatioMatchDialog";
 import { AIGenTab } from "./AIGenTab";
 import { RecipesTab } from "./panels/RecipesTab";
 import { TemplatesTab } from "./panels/TemplatesTab";
+import { ComponentLibraryPanel } from "./panels/ComponentLibraryPanel";
 import {
   EffectsPanel,
   TransitionsPanel,
@@ -57,7 +58,8 @@ type AssetsTab =
   | "transitions"
   | "ai"
   | "recipes"
-  | "templates";
+  | "templates"
+  | "components";
 
 const ASSETS_TABS: ReadonlyArray<{
   value: AssetsTab;
@@ -103,6 +105,11 @@ const ASSETS_TABS: ReadonlyArray<{
     value: "templates",
     label: "Project Templates",
     description: "Load full-project starter layouts and presets.",
+  },
+  {
+    value: "components",
+    label: "Component Library",
+    description: "Generate animated components and add them to your media.",
   },
 ] as const;
 
@@ -199,6 +206,7 @@ const TAB_ICONS: Record<AssetsTab, React.ElementType> = {
   ai: Sparkles,
   recipes: Wand2,
   templates: LayoutTemplate,
+  components: Boxes,
 };
 
 const PanelIconButton: React.FC<{
@@ -1508,6 +1516,12 @@ export const AssetsPanel: React.FC = () => {
         return (
           <div className="flex min-h-0 flex-1 flex-col border-t border-border/70 bg-background-secondary content-area-fix">
             <TemplatesTab />
+          </div>
+        );
+      case "components":
+        return (
+          <div className="flex min-h-0 flex-1 flex-col border-t border-border/70 bg-background-secondary content-area-fix">
+            <ComponentLibraryPanel />
           </div>
         );
       default:

@@ -56,7 +56,7 @@ app.get("/health", async (_request, reply) => {
 app.get("/components", async () => ({ components: await listComponents() }));
 
 app.post("/render", async (request, reply) => {
-  const { componentId, props: rawProps, fps, width, height } = request.body ?? {};
+  const { componentId, props: rawProps, fps, width, height, background } = request.body ?? {};
 
   if (typeof componentId !== "string" || !componentId) {
     return reply.code(400).send({ error: "componentId is required" });
@@ -72,6 +72,16 @@ app.post("/render", async (request, reply) => {
     return reply.code(400).send({ error: "Invalid props", details: errors });
   }
 
+  // Optional solid backdrop. The editor asks for chroma green because its decoder drops
+  // the alpha channel (see NOTES.md); omitting it keeps the native transparent render.
+  if (background !== undefined && background !== null) {
+    if (typeof background !== "string" || !/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(background)) {
+      return reply
+        .code(400)
+        .send({ error: "Invalid props", details: ["background must be a hex colour such as #00ff00"] });
+    }
+  }
+
   const job = await queue.add("render", {
     componentId,
     props,
@@ -79,6 +89,7 @@ app.post("/render", async (request, reply) => {
     width: Number(width) || config.defaultWidth,
     height: Number(height) || config.defaultHeight,
     durationInSeconds: resolveDuration(meta, props),
+    background: background ?? null,
   });
 
   return reply.code(202).send({
@@ -86,6 +97,7 @@ app.post("/render", async (request, reply) => {
     status: "pending",
     componentId,
     props,
+    background: background ?? null,
     ...(ignored?.length ? { ignoredProps: ignored } : {}),
   });
 });
@@ -114,6 +126,7 @@ app.get("/render/:jobId", async (request, reply) => {
     body.bytes = result.bytes;
     body.frames = result.frames;
     body.durationInSeconds = result.durationInSeconds ?? job.data.durationInSeconds;
+    body.background = job.data.background ?? null;
   }
 
   if (status === "failed") {

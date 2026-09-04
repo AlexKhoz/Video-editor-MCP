@@ -12,6 +12,8 @@
  *   fps      frames per second (default 30)
  *   width    frame width in px (default 1920)
  *   height   frame height in px (default 1080)
+ *   bg       solid background colour, e.g. %2300ff00 for chroma-key renders.
+ *            Omit for a transparent (alpha) render.
  *
  * Completion is reported on `window.__mcRender` for the driver to poll.
  */
@@ -46,6 +48,7 @@ const projectName = params.get("project") ?? "animated-text";
 const fps = Number(params.get("fps") ?? 30);
 const width = Number(params.get("width") ?? 1920);
 const height = Number(params.get("height") ?? 1080);
+const background = params.get("bg");
 
 window.__mcRender = { status: "working" };
 
@@ -77,8 +80,9 @@ async function main() {
     size: new Vector2(width, height),
     resolutionScale: 1,
     colorSpace: "srgb",
-    // null keeps the canvas transparent, which is the whole point of these components
-    background: null,
+    // null keeps the canvas transparent (the components' native mode). A solid colour is
+    // used for chroma-key renders, because OpenReel's decoder drops the alpha channel.
+    background: background ?? null,
     exporter: {
       name: "@motion-canvas/core/image-sequence",
       options: {

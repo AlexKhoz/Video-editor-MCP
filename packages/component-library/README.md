@@ -24,7 +24,11 @@ node scripts/render.mjs --component animated-text \
 ```
 
 Flags: `--component` `--props` `--out` `--fps` (30) `--width` (1920) `--height` (1080)
-`--keep-frames`.
+`--background` `--keep-frames`.
+
+With no `--background` the render is transparent (VP9 + `yuva420p`). Pass `--background "#00ff00"`
+to render on a solid chroma-green backdrop and encode `yuv420p` instead — that is what the editor
+uses, because OpenReel drops the alpha channel on import and keys the green out instead.
 
 Requirements: `ffmpeg` on PATH, and an installed Chrome/Chromium/Edge (`puppeteer-core` uses the
 system browser — override the path with `CHROME_PATH`). Everything runs locally; no cloud services.

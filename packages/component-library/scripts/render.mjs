@@ -67,6 +67,10 @@ function parseArgs(argv) {
         args.height = Number(value);
         i += 1;
         break;
+      case "--background":
+        args.background = value;
+        i += 1;
+        break;
       case "--keep-frames":
         args.keepFrames = true;
         break;
@@ -76,6 +80,9 @@ function parseArgs(argv) {
   }
   if (!args.component) throw new Error("--component is required");
   if (!args.out) throw new Error("--out is required");
+  if (args.background && !/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(args.background)) {
+    throw new Error(`--background must be a hex colour such as #00ff00 (got "${args.background}")`);
+  }
   return args;
 }
 
@@ -93,7 +100,7 @@ async function findChrome() {
   );
 }
 
-async function renderFrames({ component, props, fps, width, height }) {
+async function renderFrames({ component, props, fps, width, height, background }) {
   const framesDir = path.join(OUTPUT_DIR, component);
   await fs.rm(framesDir, { recursive: true, force: true });
 
@@ -112,6 +119,7 @@ async function renderFrames({ component, props, fps, width, height }) {
   url.searchParams.set("width", String(width));
   url.searchParams.set("height", String(height));
   if (props) url.searchParams.set("props", JSON.stringify(props));
+  if (background) url.searchParams.set("bg", background);
 
   const browser = await puppeteer.launch({
     executablePath: await findChrome(),
@@ -178,10 +186,15 @@ function runFfmpeg(args) {
 }
 
 /**
- * VP9 + yuva420p is the transparent-WebM combination OpenReel itself exports as
- * "webm-alpha" (apps/editor/apps/web/src/motion/export-motion-frame.ts).
+ * Two modes:
+ *
+ *  - transparent (default): VP9 + yuva420p, the combination OpenReel itself exports as
+ *    "webm-alpha" (apps/editor/apps/web/src/motion/export-motion-frame.ts). Portable, but
+ *    OpenReel's own decoder drops the alpha channel.
+ *  - chroma key (--background): the frames already carry a solid backdrop, so the alpha
+ *    plane is pointless — plain yuv420p is smaller and decodes everywhere.
  */
-async function encodeWebm({ framesDir, fps, out }) {
+async function encodeWebm({ framesDir, fps, out, background }) {
   await fs.mkdir(path.dirname(out), { recursive: true });
   await runFfmpeg([
     "-y",
@@ -192,7 +205,7 @@ async function encodeWebm({ framesDir, fps, out }) {
     "-c:v",
     "libvpx-vp9",
     "-pix_fmt",
-    "yuva420p",
+    background ? "yuv420p" : "yuva420p",
     "-b:v",
     "0",
     "-crf",
@@ -210,7 +223,7 @@ async function main() {
   const out = path.resolve(process.cwd(), args.out);
 
   const { framesDir, frameCount } = await renderFrames(args);
-  await encodeWebm({ framesDir, fps: args.fps, out });
+  await encodeWebm({ framesDir, fps: args.fps, out, background: args.background });
 
   if (!args.keepFrames) {
     await fs.rm(framesDir, { recursive: true, force: true });
@@ -218,7 +231,8 @@ async function main() {
 
   const { size } = await fs.stat(out);
   console.log(
-    `[render] wrote ${out} (${size} bytes, ${frameCount} frames @ ${args.fps}fps, VP9/yuva420p)`,
+    `[render] wrote ${out} (${size} bytes, ${frameCount} frames @ ${args.fps}fps, ` +
+      `VP9/${args.background ? `yuv420p on ${args.background}` : "yuva420p transparent"})`,
   );
 }
 

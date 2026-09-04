@@ -22,13 +22,15 @@ ffmpeg for tens of seconds, and the API must stay responsive.
 |---|---|---|
 | `GET` | `/health` | service + Redis status (503 when Redis is down) |
 | `GET` | `/components` | the component catalogue, straight from each `meta.json` |
-| `POST` | `/render` | `{ componentId, props, fps?, width?, height? }` → `202 { jobId, status: "pending", props }` |
+| `POST` | `/render` | `{ componentId, props, fps?, width?, height?, background? }` → `202 { jobId, status: "pending", props }` |
 | `GET` | `/render/:jobId` | `{ status: pending \| processing \| done \| failed, progress, … }`; when done also `file`, `url`, `bytes`, `frames` |
 | `GET` | `/files/:name.webm` | the rendered file |
 
 Props are validated against the component's `meta.json` before a job is queued: unknown keys are
 ignored (and reported as `ignoredProps`), missing keys take their defaults, numbers are range-checked
 and colours must be hex. Invalid props get a `400` listing every problem.
+`background` is an optional hex colour: pass it to render the component on a solid backdrop (the
+editor sends `#00ff00` for chroma keying), omit it for the native transparent render.
 
 ```bash
 curl -X POST http://127.0.0.1:3001/render \
