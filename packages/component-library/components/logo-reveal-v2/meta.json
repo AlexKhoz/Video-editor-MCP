@@ -1,0 +1,19 @@
+{
+  "id": "logo-reveal-v2",
+  "name": "Logo Reveal (Geometric)",
+  "description": "Shards spiral in and assemble into a ring, which locks in with a scale snap.",
+  "project": "src/projects/logo-reveal-v2.ts",
+  "durationParam": "durationInSeconds",
+  "params": [
+    { "key": "primaryColor", "label": "Primary colour", "type": "color", "default": "#f472b6" },
+    {
+      "key": "durationInSeconds",
+      "label": "Duration (s)",
+      "type": "number",
+      "default": 3,
+      "min": 2,
+      "max": 10,
+      "step": 0.5
+    }
+  ]
+}

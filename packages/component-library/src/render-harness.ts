@@ -23,11 +23,17 @@ import type { Project } from "@motion-canvas/core";
 import animatedText from "./projects/animated-text?project";
 import colorTransition from "./projects/color-transition?project";
 import logoReveal from "./projects/logo-reveal?project";
+import logoRevealV2 from "./projects/logo-reveal-v2?project";
+import lowerThird from "./projects/lower-third?project";
+import statCounter from "./projects/stat-counter?project";
 
 const PROJECTS: Record<string, Project> = {
   "animated-text": animatedText,
   "logo-reveal": logoReveal,
   "color-transition": colorTransition,
+  "lower-third": lowerThird,
+  "logo-reveal-v2": logoRevealV2,
+  "stat-counter": statCounter,
 };
 
 interface RenderReport {

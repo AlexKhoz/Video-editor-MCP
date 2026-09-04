@@ -899,3 +899,93 @@ An earlier `alpha: true` was also tried in `video/decode-worker.ts`, `video/play
 - **Autosave recovery is not deterministic across rapid reloads.** Twice a "blank preview" turned out
   to be an empty project because the Recover dialog had not appeared yet. Always assert the clip count
   before drawing conclusions from pixels.
+
+## Stage 8 — alpha as the panel default, and three new components
+
+### Alpha is now the default
+
+`ComponentLibraryPanel.tsx` renders with `DEFAULT_BACKGROUND = null` (transparent). `CHROMA_BACKGROUND`
+(`#00ff00`) is retained and documented as the fallback for OpenReel builds without the Stage 7 alpha
+fix — flipping one constant switches the whole panel back, and `--background` in `render.mjs` plus the
+`background` field on `POST /render` are unchanged.
+
+Why alpha won, measured rather than assumed:
+
+| | true alpha | chroma key |
+|---|---|---|
+| Green-dominant edge pixels in an exported frame | **0** | 4,364 (0.21% of frame) |
+| File size, 2s clip | 104,110 B | 75,415 B (alpha ~38% larger) |
+| Steps after Generate | drop on a track | drop on a track **+ apply the Chroma Key effect** |
+| Correct in preview after a reload | **yes** | no — needs the effect, which hits the open preview bug |
+
+The last row is the decisive one: a chroma component depends on an *effect*, and effects do not
+survive a reload in the preview (Stage 7). An alpha component needs no effect, so it renders correctly
+in preview and export, before and after reload — it routes around the bug we could not fix.
+
+Accepted cost: a transparent component only composites correctly in a build carrying the Stage 7 fix.
+Stock OpenReel, or another tool with the same mediabunny default, would show a black box — which is
+exactly why the chroma path stays supported.
+
+### Verification: Stage 4 and Stage 6 re-run on the default path
+
+Not alpha in isolation — the actual default user path through the panel, on a fresh project, with a
+new component (`lower-third`, title "Alpha By Default").
+
+- **Panel catalogue** lists all six components (Stage 4 requirement).
+- **Generated through the panel**: job 8, metadata recorded `background: null`, and the file on disk is
+  `vp9 … alpha_mode=1`, 73,217 B — the default path really does produce transparency.
+- **Placed** on Video 1 at 1.02s over footage on Video 2 (0.02–5.02s, trimmed from 6s with
+  *Trim end to playhead*). **No Chroma Key applied anywhere** — `effects: []` on both clips.
+- **Saved** via autosave, **reloaded**, **recovered**: component still at 1.02s with
+  `source: component-library`, `background: null`, `effects: []`.
+- **Live preview after the reload was already correct** — centre row 1920/1920 gradient pixels (no
+  black box), lower band 880 dark plate + 12 accent + 1028 gradient. This is the bug-#2 sidestep in
+  practice.
+- **Export**: 3,007,187 B, `ftypisom`, 1920x1080, 5.03s.
+
+| time | expected | centre row | lower band |
+|---|---|---|---|
+| 0.5s | footage only | 1920 gradient, 0 black | 1920 gradient |
+| 2.5s | footage + lower third | 1920 gradient, 0 black | 880 plate + 12 accent + 1028 gradient, **0 black** |
+| 4.9s | lower third sliding out | 1920 gradient | 298 plate + 1622 gradient |
+
+Zero black pixels at every sample: alpha composites correctly through the full save/reload/export
+chain with no keying step.
+
+### Three new components
+
+Chosen for the category OpenReel has no native equivalent for. Each is a Motion Canvas scene plus a
+`meta.json` using the `MotionVariable` vocabulary, registered in `vite.config.ts` and the render
+harness, and rendered through `render.mjs`:
+
+| component | render | animation |
+|---|---|---|
+| `lower-third` | 119 frames, 61,804 B, peak mean alpha 14.40 | accent bar and text plate slide in from the left, hold, slide out; lower-left safe area |
+| `logo-reveal-v2` | 108 frames, 242,256 B, peak mean alpha 3.20 | 12 shards spiral in from outside the frame, land as a dodecagon, then a ring materialises and a core snaps in |
+| `stat-counter` | 96 frames, 425,365 B, peak mean alpha 7.85 | number counts up to its target over an accent rule and label; `toLocaleString` grouping, decimals only for fractional targets |
+
+All three: VP9 1920x1080, `alpha_mode=1`, animated alpha (verified per-frame), and all six appear in
+the panel catalogue and in `GET /components`.
+
+`logo-reveal-v2` is deliberately distinct from `logo-reveal` (badge wipe) so the library has visual
+variety in the same slot. One honest note: once the ring materialises, the landed shards sit under the
+ring stroke at the same radius and stop being individually visible — the assembly reads during the
+build, not in the held frame.
+
+### Part A: OpenReel's native transition system (and why Part B was redirected)
+
+`TRANSITION_TYPES` (`packages/core/src/types/effects.ts:612`) defines **24 transition types**:
+crossfade, dipToBlack, dipToWhite, wipe, slide, zoom, push, circleReveal, blur, whipPan, radialWipe,
+pixelate, glitch, blinds, diamondReveal, spin, flip, splitReveal, **flash**, filmBurn, mosaic, ripple,
+pageTurn, colorSplit. They are real implementations, not stubs — `video/transition-engine.ts` has
+cases for `wipe` at lines 214/1405 and `flash` at 350/1435, with preview renderers in
+`preview/canvas-renderers.ts:145` and a dedicated `transition-bridge.ts`.
+
+The data model is a true A-to-B transition:
+`Transition { id, clipAId, clipBId?, edge?, type, duration, params }` (`types/timeline.ts:274`),
+applied at a clip edge from the Transitions tab.
+
+That is why the originally-proposed `flash-transition` and `wipe-overlay` components were dropped: an
+overlay clip sits *on top of* two clips and cannot interpolate between them, so it would be a strictly
+worse duplicate of `flash`/`wipe`. Transitions belong to the native system; this library covers
+overlays and graphics.

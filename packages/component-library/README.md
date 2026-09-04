@@ -10,7 +10,14 @@ out of this repo unchanged.
 |---|---|
 | `animated-text` | `text: text`, `color: color`, `durationInSeconds: number` |
 | `logo-reveal` | `primaryColor: color`, `durationInSeconds: number` |
+| `logo-reveal-v2` | `primaryColor: color`, `durationInSeconds: number` — geometric shard assembly, a visually distinct alternative to `logo-reveal` |
+| `lower-third` | `title: text`, `subtitle: text`, `accentColor: color`, `durationInSeconds: number` |
+| `stat-counter` | `label: text`, `targetNumber: number`, `accentColor: color`, `durationInSeconds: number` |
 | `color-transition` | `fromColor: color`, `toColor: color`, `durationInSeconds: number` |
+
+The library deliberately covers overlays and graphics — text, logos, lower thirds, data readouts —
+and not clip-to-clip transitions: OpenReel already ships 24 native transition types (including
+`flash` and `wipe`) that blend outgoing and incoming footage, which an overlay clip cannot do.
 
 Each one has a `components/<id>/meta.json` describing its params, defaults and ranges — that file is
 the contract the editor UI and render-service read.

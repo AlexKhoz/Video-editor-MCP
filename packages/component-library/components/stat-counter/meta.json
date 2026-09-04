@@ -1,0 +1,29 @@
+{
+  "id": "stat-counter",
+  "name": "Stat Counter",
+  "description": "A number counts up to its target above a labelled accent rule.",
+  "project": "src/projects/stat-counter.ts",
+  "durationParam": "durationInSeconds",
+  "params": [
+    { "key": "label", "label": "Label", "type": "text", "default": "Active users" },
+    {
+      "key": "targetNumber",
+      "label": "Target number",
+      "type": "number",
+      "default": 1250,
+      "min": 0,
+      "max": 1000000,
+      "step": 1
+    },
+    { "key": "accentColor", "label": "Accent colour", "type": "color", "default": "#34d399" },
+    {
+      "key": "durationInSeconds",
+      "label": "Duration (s)",
+      "type": "number",
+      "default": 3,
+      "min": 2,
+      "max": 12,
+      "step": 0.5
+    }
+  ]
+}

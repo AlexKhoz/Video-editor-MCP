@@ -20,16 +20,27 @@ import {
  * completion, then hands the resulting file to the project store's existing
  * `importMedia()` so it lands in the media library like any other import.
  *
- * Components are rendered on a chroma-green backdrop rather than with an alpha channel:
- * OpenReel's decoder drops alpha (see NOTES.md), so transparency is achieved by keying
- * the green out with the clip's existing Chroma Key controls.
+ * Components render with a true alpha channel by default, so a generated clip composites
+ * over lower tracks with no extra step. That needs the alpha fix in
+ * `ExportFrameDecoder` (Stage 7 in NOTES.md); without it the export would show a black
+ * box. Set `DEFAULT_BACKGROUND` to `CHROMA_BACKGROUND` to fall back to the chroma-key
+ * workflow instead — rendering on green and keying it out with the Chroma Key effect —
+ * which is what unpatched OpenReel builds need.
  */
 
 const RENDER_SERVICE_URL =
   (import.meta.env.VITE_RENDER_SERVICE_URL as string | undefined) ?? "http://127.0.0.1:3001";
 
-/** Matches OpenReel's own chroma-key default (keyColor r:0 g:1 b:0). */
+/** Chroma fallback: matches OpenReel's own chroma-key default (keyColor r:0 g:1 b:0). */
 const CHROMA_BACKGROUND = "#00ff00";
+
+/**
+ * Backdrop requested from render-service. `null` renders a transparent (VP9 + yuva420p)
+ * clip; a hex colour renders on that solid colour for chroma keying.
+ */
+const DEFAULT_BACKGROUND: string | null = null;
+
+void CHROMA_BACKGROUND; // kept as the documented fallback
 
 const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 10 * 60_000;
@@ -223,7 +234,7 @@ export const ComponentLibraryPanel: React.FC = () => {
     setPhase("queued");
 
     try {
-      const { blob, renderedFileId } = await requestRender(selected.id, values, CHROMA_BACKGROUND);
+      const { blob, renderedFileId } = await requestRender(selected.id, values, DEFAULT_BACKGROUND);
       const file = new File([blob], fileNameFor(selected, values), { type: "video/webm" });
 
       const before = new Set(
@@ -244,7 +255,7 @@ export const ComponentLibraryPanel: React.FC = () => {
           componentId: selected.id,
           props: values,
           renderedFileId,
-          background: CHROMA_BACKGROUND,
+          background: DEFAULT_BACKGROUND,
         });
       }
 
@@ -273,7 +284,7 @@ export const ComponentLibraryPanel: React.FC = () => {
   const handleRegenerate = useCallback(async () => {
     if (!selected || !selectedComponentClip) return;
     const { clip, metadata } = selectedComponentClip;
-    const background = metadata.background ?? CHROMA_BACKGROUND;
+    const background = metadata.background ?? DEFAULT_BACKGROUND;
 
     setLastError(null);
     setProgress(0);

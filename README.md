@@ -92,12 +92,19 @@ the left rail.
    ~20s and the result appears in Project Media.
 3. Hover the media card and press **Add to timeline**. Note two OpenReel behaviours: clips insert at
    the **playhead**, and **"Video 1" is the topmost layer** — put the component above the footage.
-4. With the component clip selected, open **Effects** and **double-click** the *Chroma Key* card. The
-   component is rendered on `#00ff00`, so this keys the background out and composites the animation over
-   the clip below. (Use the effect card, not the inspector's Green Screen toggle — see NOTES.md.)
+4. That's it — components render with a **true alpha channel**, so the animation composites over the
+   clip below with no further step.
+   *Chroma fallback:* set `DEFAULT_BACKGROUND` to `CHROMA_BACKGROUND` in `ComponentLibraryPanel.tsx`
+   to render on `#00ff00` instead, then select the clip, open **Effects** and **double-click** the
+   *Chroma Key* card. Needed on OpenReel builds without the Stage 7 alpha fix. (Use the effect card,
+   not the inspector's Green Screen toggle — see NOTES.md.)
 5. Select a generated clip and reopen **Component Library** to edit its params and **Re-render clip**;
    the clip keeps its effects, trim and position.
 6. **Export** from the toolbar.
+
+Transitions between two clips are a different job: OpenReel has 24 native transition types
+(`crossfade`, `wipe`, `flash`, …) in the **Transitions** tab, and those blend outgoing and incoming
+footage properly. This library is for overlays and graphics, not transitions.
 
 ## Tests
 
