@@ -684,3 +684,90 @@ visible fringing at preview scale.
 For Stage 5/6 automation: the inspector accordions are `div[role="button"]`, not `<button>` elements,
 so `querySelectorAll("button")` misses them entirely — select by `aria-label` instead
 (`Expand … section` / `Collapse … section`).
+
+## Stage 5 — component metadata and re-render
+
+### Where the metadata lives
+
+On `clip.metadata`, via the `ClipMetadata` index signature found in Stage 1 — **no core schema
+change**:
+
+```json
+"metadata": {
+  "source": "component-library",
+  "componentId": "animated-text",
+  "props": { "text": "Persisted swap", "color": "#ffffff", "durationInSeconds": 2 },
+  "renderedFileId": "6.webm",
+  "background": "#00ff00"
+}
+```
+
+`background` is recorded so a re-render reproduces the same chroma backdrop rather than assuming the
+current default.
+
+### How it gets there
+
+The panel imports the rendered file, but the *clip* only exists once the user drops that media on a
+track — so `services/component-library-clips.ts` bridges the gap:
+
+- `registerGeneratedMedia(mediaId, info)` records mediaId -> component info, mirrored into
+  `localStorage` (`openreel-component-library-media`) so a reload before placement does not lose it;
+- a single store subscription stamps `clip.metadata` on any clip referencing registered media that
+  does not carry it yet — idempotent, so it is safe on every store change;
+- `updateClipMetadata(clipId, patch)` merges into one clip's metadata by spreading the clip, so
+  `effects`, `transform` and trim points are carried over untouched. Written straight to the store
+  because there is no `clip/setMetadata` action; `GreenScreenSection` mutates store state the same way.
+
+### Round-trip: confirmed, no re-render
+
+Generated `animated-text` ("Round trip"), placed it, applied Chroma Key, waited for autosave, reloaded
+the page and hit Recover:
+
+| check | result |
+|---|---|
+| `clip.metadata` after reload | all five fields intact |
+| `clip.effects` after reload | `["chromaKey"]` |
+| media restored | `animated-text-Round trip.webm`, `isPlaceholder: false` |
+| calls to render-service after reload | **none** (`performance` resource list has no `:3001` entries) |
+| render-service job counter | `4` before reload, `4` after — nothing re-rendered |
+
+### Re-render: effects survive
+
+`handleRegenerate` uses **`replaceMediaAsset(clip.mediaId, file)`**, which swaps the bytes behind the
+*existing* mediaId. The clip object is never rebuilt, so effects/transform/trim/position survive by
+construction rather than by copying them across. Verified on a clip that already had Chroma Key:
+
+| check | before | after |
+|---|---|---|
+| clip id | `b3010207-…` | `b3010207-…` (same) |
+| mediaId | `17f787fb-…` | `17f787fb-…` (same) |
+| `effects` | `[chromaKey enabled]` | `[chromaKey enabled]` |
+| `metadata.props.text` | "Round trip" | "Re-rendered OK" |
+| `renderedFileId` | `4.webm` | `5.webm` |
+| `startTime` / `duration` / `inPoint` / `outPoint` | 0 / 2.033 / 0 / 2.033 | unchanged |
+
+And the keying still works — sampled from OpenReel's own export at 1.0s, centre row:
+**0 green pixels**, background `(233,62,119)` (the gradient underneath), 462 white glyph pixels; at
+4.0s (component clip ended) pure gradient. The UI reports it too: "1 effect kept on the clip."
+
+### Two bugs found while testing
+
+1. **`replaceMediaAsset` never persists the new blob — fixed in our flow.** It updates the in-memory
+   media item but calls no `saveMediaBlob` (the only call in `media-slice.ts` is inside `importMedia`).
+   Consequence: the re-render looked right until a reload, after which recovery re-attached the
+   *previous* bytes and the clip showed the old text while its metadata described the new one.
+   `handleRegenerate` now writes the blob itself after the swap. Re-tested end to end: re-rendered to
+   "Persisted swap", waited for autosave, reloaded, recovered — preview and export both show the new
+   render, and the export still keys (0 green, 462 white).
+2. **The preview does not apply clip effects after a media swap, or after loading a project.** This one
+   is pre-existing OpenReel behaviour, not caused by the swap: on a freshly recovered project whose
+   clip carries `effects: [chromaKey]`, the preview shows the raw green while **the export of that very
+   same project keys correctly** (0 green). Dispatching `openreel:preview-invalidate` (the convention
+   other inspector sections use) does not help; scrubbing the playhead does not help. The effect
+   appears to be registered with the preview's effect pipeline only when applied through the UI in that
+   session.
+
+   Consequence for Stage 6: after a reload the demo's live preview will show green even though the
+   project is correct. Either re-apply the Chroma Key effect in-session before demoing the preview, or
+   demo the exported file. Worth a follow-up alongside the alpha decode patch — both are preview/decode
+   plumbing in the same area.
