@@ -1,0 +1,219 @@
+{
+  "version": "1.2.0",
+  "minimumReaderVersion": "1.2.0",
+  "capabilities": [
+    "universal-tracks-v1"
+  ],
+  "project": {
+    "id": "3e084fba-edde-45a9-bc03-ad3325ff87c3",
+    "name": "New Horizontal Video",
+    "createdAt": 1788520330428,
+    "modifiedAt": 1788521445981,
+    "settings": {
+      "width": 1920,
+      "height": 1080,
+      "frameRate": 30,
+      "sampleRate": 48000,
+      "channels": 2
+    },
+    "mediaLibrary": {
+      "items": [
+        {
+          "id": "86966e61-a33c-42b2-95c0-977495444110",
+          "name": "test-clip.mp4",
+          "type": "video",
+          "fileHandle": null,
+          "blob": null,
+          "metadata": {
+            "duration": 6,
+            "width": 640,
+            "height": 360,
+            "frameRate": 30,
+            "codec": "avc",
+            "sampleRate": 44100,
+            "channels": 1,
+            "fileSize": 97181,
+            "hasVideo": true,
+            "hasAudio": true
+          },
+          "thumbnailUrl": "blob:http://localhost:5173/a2c227f8-3a64-4254-b61b-ba87206b7bee",
+          "waveformData": null,
+          "sourceFile": {
+            "name": "test-clip.mp4",
+            "size": 97181,
+            "lastModified": 1788520364277
+          },
+          "isPlaceholder": false
+        }
+      ]
+    },
+    "timeline": {
+      "tracks": [
+        {
+          "id": "track-cd0c6a8c-3909-4efa-aa94-6ca7b5b249f7",
+          "type": "video",
+          "name": "Video 1",
+          "clips": [
+            {
+              "id": "523fdc8a-1a05-4278-a131-1d9fbdf2a3cb",
+              "mediaId": "86966e61-a33c-42b2-95c0-977495444110",
+              "trackId": "track-cd0c6a8c-3909-4efa-aa94-6ca7b5b249f7",
+              "startTime": 0,
+              "duration": 1.9866665649414061,
+              "inPoint": 0,
+              "outPoint": 1.9866665649414061,
+              "effects": [],
+              "audioEffects": [],
+              "transform": {
+                "position": {
+                  "x": 0,
+                  "y": 0
+                },
+                "scale": {
+                  "x": 1,
+                  "y": 1
+                },
+                "rotation": 0,
+                "anchor": {
+                  "x": 0.5,
+                  "y": 0.5
+                },
+                "opacity": 1,
+                "fitMode": "contain"
+              },
+              "volume": 1,
+              "keyframes": []
+            },
+            {
+              "id": "3a26d2fb-a207-4dd7-9a90-e50d96386129",
+              "mediaId": "86966e61-a33c-42b2-95c0-977495444110",
+              "trackId": "track-cd0c6a8c-3909-4efa-aa94-6ca7b5b249f7",
+              "startTime": 1.9866665649414061,
+              "duration": 2,
+              "inPoint": 1.9866665649414061,
+              "outPoint": 3.986666564941406,
+              "effects": [],
+              "audioEffects": [],
+              "transform": {
+                "position": {
+                  "x": 0,
+                  "y": 0
+                },
+                "scale": {
+                  "x": 1,
+                  "y": 1
+                },
+                "rotation": 0,
+                "anchor": {
+                  "x": 0.5,
+                  "y": 0.5
+                },
+                "opacity": 1,
+                "fitMode": "contain"
+              },
+              "volume": 1,
+              "keyframes": []
+            }
+          ],
+          "transitions": [],
+          "locked": false,
+          "hidden": false,
+          "muted": false,
+          "solo": false
+        },
+        {
+          "id": "track-c2d99767-32b8-4a36-a027-2d6c9c99a8a2",
+          "type": "video",
+          "mode": "standard",
+          "name": "Track 1",
+          "clips": [],
+          "transitions": [],
+          "locked": false,
+          "hidden": false,
+          "muted": false,
+          "solo": false
+        },
+        {
+          "id": "track-444fd7d7-355b-47c5-8a0e-774e82f45118",
+          "type": "video",
+          "mode": "standard",
+          "name": "Track 2",
+          "clips": [],
+          "transitions": [],
+          "locked": false,
+          "hidden": false,
+          "muted": false,
+          "solo": false
+        },
+        {
+          "id": "track-fd26dafa-ab48-4600-b94b-a841e4b623e1",
+          "type": "video",
+          "mode": "standard",
+          "name": "Track 3",
+          "clips": [],
+          "transitions": [],
+          "locked": false,
+          "hidden": false,
+          "muted": false,
+          "solo": false
+        }
+      ],
+      "subtitles": [],
+      "duration": 8.986666564941405,
+      "markers": []
+    },
+    "motionCompositions": [],
+    "motionInstances": [],
+    "capabilities": [
+      "universal-tracks-v1"
+    ],
+    "minimumReaderVersion": "1.2.0",
+    "textClips": [
+      {
+        "id": "text-1788520621146-8ebbk454n",
+        "trackId": "track-444fd7d7-355b-47c5-8a0e-774e82f45118",
+        "startTime": 3.986666564941406,
+        "duration": 5,
+        "text": "Heading",
+        "style": {
+          "fontFamily": "Inter",
+          "fontSize": 72,
+          "fontWeight": 700,
+          "fontStyle": "normal",
+          "color": "#ffffff",
+          "strokeColor": "#111827",
+          "strokeWidth": 2,
+          "textAlign": "center",
+          "verticalAlign": "middle",
+          "lineHeight": 1.2,
+          "letterSpacing": 0
+        },
+        "transform": {
+          "position": {
+            "x": 0.5,
+            "y": 0.5
+          },
+          "scale": {
+            "x": 1,
+            "y": 1
+          },
+          "rotation": 0,
+          "anchor": {
+            "x": 0.5,
+            "y": 0.5
+          },
+          "opacity": 1
+        },
+        "keyframes": []
+      }
+    ],
+    "shapeClips": [],
+    "svgClips": [],
+    "stickerClips": [],
+    "generatedShaders": []
+  },
+  "metadata": {
+    "exportedAt": 1788521445997,
+    "description": "Exported from New Horizontal Video"
+  }
+}
