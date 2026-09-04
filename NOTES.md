@@ -226,6 +226,162 @@ skip it for the prototype.
   fetched from render-service is the cleanest way to get a rendered component into the library — it handles
   metadata probing, thumbnailing, blob persistence and library insertion for us.
 
+## Motion Design mode vs. our plan
+
+Short focused pass over OpenReel's built-in "Motion Design" mode (the second workspace tab, and the
+`motionCompositions` / `motionInstances` fields in the project JSON). Conclusion up front: **it is not
+keyframe motion on existing clips — it is a full parameterized animation-composition system that already
+does structurally what our Component Library is meant to do.** It is directly relevant, and it changes
+the cheapest implementation path for Stage 4/5 (though not the brief we are following).
+
+### What it actually is
+
+A second, After-Effects-shaped editor living in `apps/web/src/motion/` (`MotionCreatorApp.tsx`,
+`MotionCreatorShell.tsx`) with layer panel, graph editor, masks, deform, effects/shaders, animation
+presets, camera, lights, motion blur and its own render queue. Types are in
+`packages/core/src/motion/types.ts` (~1,100 lines).
+
+Two-level data model, mirroring After Effects' comp/instance split:
+
+- **`MotionComposition`** (`packages/core/src/motion/types.ts:1054`) — the reusable definition:
+  `id`, `name`, `width`, `height`, `frameRate`, `duration`, `backgroundColor`, `layers[]`, `assets[]`,
+  `fonts[]`, `markers[]`, `camera`, and — the interesting part — **`variables: MotionVariable[]`**.
+- **`MotionVariable`** (`types.ts:990`) — `{ id, name, type, value }` where
+  `type: "text" | "number" | "color" | "boolean" | "media"`. That is essentially our planned
+  `meta.json` param schema, already in the codebase.
+- **`MotionCompositionInstance`** (`types.ts:1081`) — a placement of a composition on a main-timeline
+  track: `compositionId`, `trackId`, `startTime`, `duration`, `transform`, `opacity`, `blendMode`,
+  and **`variableOverrides: Record<string, string | number | boolean>`**.
+
+So: definition + per-instance parameter overrides + timeline placement. Compare with our Stage 5 target
+(`componentId` + `props` + timing) — it is the same shape, with `compositionId` ~ `componentId` and
+`variableOverrides` ~ `props`.
+
+### It renders live, not to a file
+
+Instances are composited **per frame** into the main editor timeline, not pre-rendered into a media file.
+`Preview.tsx:1821` filters `project.motionInstances` by `trackId` and the current time window and hands
+each to a `MotionRenderer`. `variableOverrides` is genuinely honored by the render path — it is threaded
+through `packages/core/src/motion/motion-renderer.ts:165`, `motion-render-order.ts:72` and
+`motion-gpu-render.ts:161`. There is no intermediate webm; a composition is re-rendered from its layer
+graph on every frame draw.
+
+This is the fundamental architectural difference from our plan, which pre-renders each component to a
+`webm` with alpha and treats the result as ordinary media.
+
+### Is there a shortcut for Stage 4?
+
+Partly — the store layer, yes; the UI, no.
+
+- **Reusable:** `insertMotionInstance(compositionId, placement?)`
+  (`apps/web/src/stores/project-store.ts:3456`, typed at `stores/project/types.ts:250`) does exactly what a
+  library panel needs: place a parameterized composition on a track at a given `startTime`/`duration`.
+  There are matching `removeMotionInstance`, `getMotionComposition`, `getMotionInstance` actions, and
+  motion actions are wired into undo/redo via `packages/core/src/actions/handlers/motion.ts`.
+- **Not reusable:** there is **no library/browser UI** for it. The only caller of `insertMotionInstance`
+  is `MotionCreatorShell.tsx:666` — a "Use in editor" button inside the Motion Design workspace, which
+  places the composition you are currently authoring. You author a comp by hand, then push it to the
+  timeline. There is no "pick from a catalogue" panel to mirror.
+- **Also missing:** despite `variableOverrides` existing in the type and being honored by the renderer,
+  **no UI writes it** — a grep for `variableOverrides` across `apps/web/src/**/*.tsx` returns nothing.
+  So per-instance parameter editing is data-model-only today. (`TemplateVariablesPanel.tsx` is a different
+  feature — project-template variables, not motion variables.)
+
+Net: for Stage 4 we would still build the panel and the parameter form ourselves either way. What the
+motion path would save is the render service, the queue and the file storage; what it would cost is
+writing components as OpenReel `MotionLayer` graphs instead of Motion Canvas scenes.
+
+### Conflicts with our plan
+
+- **No conflict on storage or in-repo assumptions.** Compositions are plain project data stored in the
+  project JSON (and IndexedDB) — user-authored at runtime, not compiled into the repo. Nothing expects a
+  fixed in-repo catalogue, so nothing blocks fetching assets from an external service.
+- **No conflict on our chosen approach.** Our render-service clips arrive as normal media library items +
+  ordinary `Clip`s carrying `metadata.componentId` / `props` / `renderedFileId`. That path does not touch
+  `motionCompositions` / `motionInstances` at all — the two systems sit side by side without interfering.
+- **One real tension, worth naming:** we are about to build a second, parallel mechanism for
+  "parameterized reusable animated component on the timeline" when the host app already has one. The
+  duplication is deliberate (the brief specifies Motion Canvas, and Motion Canvas gives us a real
+  animation DSL, headless CLI rendering, and alpha-channel webm output that survives outside this editor),
+  but it is duplication.
+- **Practical trade-offs of the two paths**, for the record:
+  - *Our plan (Motion Canvas + render service):* components are authored in TypeScript with a proper
+    animation library; rendering is headless and reproducible; output is a portable file. Costs: a
+    service, a Redis queue, render latency before a clip appears, and re-render on every parameter change.
+  - *Motion Design instances:* zero infrastructure, instant parameter changes, live compositing, undo/redo
+    already wired. Costs: components must be expressed as OpenReel motion layer graphs (no external DSL),
+    they only exist inside OpenReel, and we would be building on a large in-repo subsystem we did not write
+    and would have to learn.
+
+**Decision taken:** proceed with Stage 2 as briefed (Motion Canvas + render service). Recorded here so the
+alternative is a deliberate rejection rather than an oversight — if render latency turns out to be the
+prototype's main friction, `insertMotionInstance` + `variableOverrides` is the escape hatch.
+
+### Direct comparison: native Motion Design vs. external Motion Canvas + render-service
+
+**1. Live or baked?** Both, on separate paths — and this is a point in its favour.
+
+- *On the main timeline:* strictly **live, per-frame, never baked.** `Preview.tsx:1821` filters
+  `project.motionInstances` by `trackId` + time window and renders each through `MotionRenderer` on every
+  frame draw. Equivalent to a Remotion Player: parameter changes are instant, nothing is written to disk.
+- *Engine:* primary path is **`OffscreenCanvas` 2D** (`motion-renderer.ts:633`, `getContext("2d")`).
+  An optional **WebGPU** compositor handles layer blending when available
+  (`motion-gpu-compositor.ts:331`, `getContext("webgpu")`, with WGSL blend shaders from
+  `motion-gpu-blend.ts`) behind a `preferGpu` flag; it falls back to Canvas2D otherwise.
+  Adjustment layers, track mattes and backdrop-blur force the Canvas2D compositing path
+  (`compositionRequiresCanvas2dCompositing`, `motion-gpu-render.ts:28`). 3D (`scene3d`) layers use
+  **WebGL** internally (`motion-renderer.ts:756`). So: Canvas2D by default, WebGPU compositing when the
+  GPU allows, WebGL for 3D. In our embedded-browser environment WebGPU is unavailable, so Canvas2D.
+- *It can also bake:* Motion Design has its own render queue (`apps/web/src/motion/render-queue-runner.ts`
+  -> `exportMotionCompositionScene`) whose formats (`export-motion-frame.ts:64`,
+  `MOTION_EXPORT_FORMATS`) are: `mp4` (H.264), **`webm-alpha` — "WebM (VP9, transparent)"**,
+  `mov-prores4444` (transparent) and `png-sequence` (transparent ZIP), with resolution scaling and a
+  frame range. **That is exactly the deliverable Stage 2 was going to build a Node service to produce,
+  and it already exists client-side.**
+
+**2. Can a composition be authored as arbitrary code?** **No.** This is the real constraint.
+
+- `MotionLayerType` (`packages/core/src/motion/types.ts:20`) is a **closed union of ten types**:
+  `text | shape | image | video | group | null | composition | adjustment | particle | scene3d`.
+  There is no "custom code" or "custom component" layer type. A composition is a declarative JSON layer
+  graph in OpenReel's own schema, authored through the Motion Design UI.
+- Two genuine code escape hatches exist, but neither is component-level authoring:
+  - **Per-property expressions.** `MotionExpression.code` (`types.ts:575`) holds a JS snippet, compiled via
+    a `Function`-style compiler with `"use strict"` and cached (`motion-expressions.ts:544`), with
+    After-Effects-like helpers (default example: `value + wiggle(2, 20)`). This animates *one property*,
+    it does not define a component.
+  - **Custom GLSL.** `MotionShaderDef` (`packages/core/src/motion/shaders/types.ts`) carries raw `glsl`
+    plus typed params (`number | color`) and an `origin: "builtin" | "generated"`. Real shader code, but
+    scoped to fills/effects on a layer.
+- **Portability verdict:** a composition is meaningful only to OpenReel's renderer. There is no
+  composition import/export to a standalone file (no `importComposition`/`exportComposition` anywhere in
+  `apps/web/src/motion/`); comps live inside the project JSON. Authoring components natively means our
+  component library becomes fork-specific data with no life outside this editor — precisely the coupling
+  the external render-service was chosen to avoid. Motion Canvas scenes, by contrast, are ordinary
+  TypeScript in a standalone repo that renders to a file usable by any editor.
+
+**3. Recommendation: keep the external Motion Canvas + render-service plan.** Reasoning, weighted:
+
+- The decisive factor is (2), not (1). Live rendering and transparent-webm output are both *better* in the
+  native path — but component **authoring** is locked to a proprietary declarative schema with a
+  GUI-first workflow. Our components (`animated-text`, `logo-reveal`, `color-transition`) are code
+  artifacts we want to version, review, parameterize and reuse; as OpenReel layer graphs they would be
+  hand-built in a UI and stored as project JSON, with no path to any other tool.
+- The brief's stated rationale (portability, MIT-licensed external engine, self-hosted rendering) is
+  satisfied only by the external path. Pivoting would silently trade the prototype's main design goal for
+  short-term convenience.
+- What we knowingly give up: instant parameter feedback (we re-render on every prop change), and the
+  infrastructure cost of a service plus Redis queue. Both are acceptable for a prototype and were
+  budgeted in the original architecture.
+- Two concrete borrowings from the native system, at no cost to portability:
+  - Mirror `MotionVariable`'s param typing (`"text" | "number" | "color" | "boolean" | "media"`,
+    `types.ts:990`) in our `meta.json` schema instead of inventing our own vocabulary.
+  - Keep `insertMotionInstance` + `variableOverrides` documented as the escape hatch if render latency
+    becomes the prototype's dominant friction — the store action, undo/redo wiring and live renderer are
+    already there, so a later pivot stays cheap.
+- Also worth stealing regardless of path: their `webm-alpha` encoder settings, as a cross-check that our
+  Motion Canvas CLI output (VP9 + alpha) matches what this editor imports cleanly.
+
 ## Stage 2 — Motion Canvas components
 
 _pending_
