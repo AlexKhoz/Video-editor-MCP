@@ -25,6 +25,13 @@ ffmpeg for tens of seconds, and the API must stay responsive.
 | `POST` | `/render` | `{ componentId, props, fps?, width?, height?, background? }` → `202 { jobId, status: "pending", props }` |
 | `GET` | `/render/:jobId` | `{ status: pending \| processing \| done \| failed, progress, … }`; when done also `file`, `url`, `bytes`, `frames` |
 | `GET` | `/files/:name.webm` | the rendered file |
+| `GET`/`POST` | `/projects`, `/projects/:id` (+`PUT`/`DELETE`) | server-side projects (JSON blob per project) |
+| `GET`/`POST` | `/media`, `/media/:id` | media bytes; upload is raw `application/octet-stream` with `x-filename` / `x-media-id` / `x-mime-type` headers, streamed to disk |
+| `GET`/`POST` | `/component-metadata`, `/component-metadata/:mediaId` | mediaId -> componentId + props + background + renderedFileId |
+
+Storage lives in SQLite (`storage/video-editor.sqlite`, via Node's built-in `node:sqlite`) with media
+bytes under `storage/media/`. **There is no authentication** — every project is readable and writable
+by anyone who can reach the service, and concurrent edits are last-save-wins. See NOTES.md.
 
 Props are validated against the component's `meta.json` before a job is queued: unknown keys are
 ignored (and reported as `ignoredProps`), missing keys take their defaults, numbers are range-checked
@@ -53,7 +60,8 @@ Concurrency is 1 by default; a render is Chrome- and ffmpeg-heavy.
 
 Environment variables, all optional: `PORT` (3001), `HOST` (127.0.0.1), `REDIS_HOST`, `REDIS_PORT`,
 `QUEUE_NAME`, `RENDER_STORAGE_DIR`, `COMPONENT_LIBRARY_DIR`, `WORKER_CONCURRENCY`,
-`RENDER_TIMEOUT_MS`, `RENDER_FPS`, `RENDER_WIDTH`, `RENDER_HEIGHT`, `LOG_LEVEL`.
+`RENDER_TIMEOUT_MS`, `RENDER_FPS`, `RENDER_WIDTH`, `RENDER_HEIGHT`, `LOG_LEVEL`, `DB_PATH`,
+`MEDIA_DIR`, `UPLOAD_LIMIT_BYTES` (default 2 GB).
 
 ## Test
 

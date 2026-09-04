@@ -14,6 +14,19 @@ export const config = {
     ? path.resolve(process.env.RENDER_STORAGE_DIR)
     : path.join(REPO_ROOT, "storage", "rendered"),
 
+  /** SQLite database file (server-side projects, media and component metadata). */
+  dbPath: process.env.DB_PATH
+    ? path.resolve(process.env.DB_PATH)
+    : path.join(REPO_ROOT, "storage", "video-editor.sqlite"),
+
+  /** Where uploaded media bytes live, server-side. */
+  mediaDir: process.env.MEDIA_DIR
+    ? path.resolve(process.env.MEDIA_DIR)
+    : path.join(REPO_ROOT, "storage", "media"),
+
+  /** Per-upload ceiling. Fastify's default 1 MB body limit is far too small for video. */
+  uploadLimitBytes: Number(process.env.UPLOAD_LIMIT_BYTES ?? 2 * 1024 * 1024 * 1024),
+
   /** The standalone Motion Canvas project from Stage 2. */
   componentLibraryDir: process.env.COMPONENT_LIBRARY_DIR
     ? path.resolve(process.env.COMPONENT_LIBRARY_DIR)

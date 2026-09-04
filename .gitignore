@@ -13,3 +13,7 @@ out/
 packages/component-library/output/
 storage/rendered/*
 apps/render-service/node_modules/
+storage/media/
+storage/*.sqlite
+storage/*.sqlite-shm
+storage/*.sqlite-wal

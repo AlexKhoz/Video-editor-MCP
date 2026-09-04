@@ -4,6 +4,7 @@ import type { Action, MediaItem } from "@openreel/core";
 import type { ProjectState } from "../project-store";
 import { getMediaBridge, initializeMediaBridge } from "../../bridges/media-bridge";
 import { saveMediaBlob, deleteMediaBlob } from "../../services/media-storage";
+import { uploadMedia } from "../../services/server-storage";
 
 type Get = StoreApi<ProjectState>["getState"];
 type Set = StoreApi<ProjectState>["setState"];
@@ -159,6 +160,13 @@ export function createMediaSlice(set: Set, get: Get): MediaSlice {
         } catch (err) {
           console.error("[ProjectStore] Failed to persist media blob:", err);
         }
+
+        // Stage 8: the bytes also go to the server under the same mediaId, so the
+        // project opens on another browser. IndexedDB above stays as the local cache.
+        // Deliberately not awaited - a slow upload must not block the import.
+        void uploadMedia(newMediaItem.id, file, file.name).catch((err) => {
+          console.warn("[ProjectStore] Server media upload failed:", err);
+        });
 
         if (mediaType === "video" && !thumbnailUrl) {
           setTimeout(async () => {

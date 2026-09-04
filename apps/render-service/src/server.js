@@ -8,15 +8,25 @@ import Fastify from "fastify";
 import { getComponent, listComponents, resolveDuration, validateProps } from "./components.js";
 import { config } from "./config.js";
 import { createQueue, toApiStatus } from "./queue.js";
+import { registerStorageRoutes } from "./routes-storage.js";
 
-const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
+const app = Fastify({
+  logger: { level: process.env.LOG_LEVEL ?? "info" },
+  // Fastify defaults to 1 MB, which rejects any real video upload.
+  bodyLimit: config.uploadLimitBytes,
+});
 const queue = createQueue();
 
 // The editor runs on a different localhost port, so allow cross-origin reads.
 app.addHook("onRequest", async (request, reply) => {
   reply.header("access-control-allow-origin", "*");
-  reply.header("access-control-allow-headers", "content-type");
-  reply.header("access-control-allow-methods", "GET,POST,OPTIONS");
+  // x-filename / x-media-id / x-mime-type carry the upload metadata for POST /media;
+  // omitting them here makes the browser's preflight fail with a bare "Failed to fetch".
+  reply.header(
+    "access-control-allow-headers",
+    "content-type,x-filename,x-media-id,x-mime-type",
+  );
+  reply.header("access-control-allow-methods", "GET,POST,PUT,DELETE,OPTIONS");
   if (request.method === "OPTIONS") {
     reply.code(204).send();
   }
@@ -159,6 +169,7 @@ app.get("/files/:fileName", async (request, reply) => {
 
 async function main() {
   await fs.mkdir(config.storageDir, { recursive: true });
+  await registerStorageRoutes(app);
   await app.listen({ host: config.host, port: config.port });
   app.log.info(
     `render-service on http://${config.host}:${config.port} — storage ${config.storageDir}`,

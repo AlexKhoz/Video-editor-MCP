@@ -989,3 +989,119 @@ That is why the originally-proposed `flash-transition` and `wipe-overlay` compon
 overlay clip sits *on top of* two clips and cannot interpolate between them, so it would be a strictly
 worse duplicate of `flash`/`wipe`. Transitions belong to the native system; this library covers
 overlays and graphics.
+
+## Stage 9 — server-side storage for projects, media and component metadata
+
+### Choices, and why
+
+- **SQLite via `node:sqlite`** — Node core on 22.14 (experimental warning, no flag needed), so zero
+  dependencies and no native build on Windows. The schema is plain SQL behind a handful of exported
+  functions (`src/db.js`), so swapping to Postgres means rewriting one module.
+- **Inside render-service**, not a sibling service. It already owns `storage/`, the config and the CORS
+  hook, and the editor already talks to it; a second process would have duplicated all of that for no
+  gain at this stage.
+- **A project is one JSON blob**, not a normalised timeline. The editor already has a stable
+  serialisation format (`getFullProject()` + OpenReel's own serialiser) and nothing needs to query
+  inside a project yet.
+- **Uploads are raw `application/octet-stream`** with `x-filename` / `x-media-id` / `x-mime-type`
+  headers, streamed to disk with `pipeline()`. Multipart would have meant a dependency and, in its
+  simple form, buffering an entire video in memory; the only client is our own editor, so headers are
+  enough. Fastify's default 1 MB `bodyLimit` is raised to `UPLOAD_LIMIT_BYTES` (default 2 GB).
+- **IndexedDB is kept as a cache, not removed.** `importMedia` still writes the local blob and the
+  autosave/recovery flow still runs; the server write is added alongside. Ripping the local layer out
+  would have touched the preview, autosave and recovery paths — far more invasive than this stage
+  warrants — and it doubles as the offline safety net.
+
+### Schema
+
+```
+projects            id, name, data (JSON), created_at, updated_at
+media               id, filename, storage_path, mime_type, size, created_at
+component_metadata  media_id, component_id, props (JSON), background, rendered_file_id, updated_at
+```
+
+Bytes live in `storage/media/<mediaId><ext>`; the SQLite file is `storage/video-editor.sqlite`.
+`component_metadata` replaces Stage 5's localStorage registry — its deferred item #3 is now closed.
+
+### API
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/projects` | id, name, createdAt, updatedAt, newest first |
+| `POST` | `/projects` | create; id defaults to the project's own id |
+| `GET` | `/projects/:id` | full project JSON |
+| `PUT` | `/projects/:id` | upsert — saving twice updates in place |
+| `DELETE` | `/projects/:id` | |
+| `GET` | `/media` | list |
+| `POST` | `/media` | raw body, streamed to disk, keyed by the editor's own mediaId |
+| `GET` | `/media/:id` | streams the file with its stored mime type |
+| `GET`/`POST` | `/component-metadata`, `/component-metadata/:mediaId` | list / read / upsert |
+
+### Editor wiring
+
+- `services/server-storage.ts` — the client. Save strips binary fields through OpenReel's own
+  `serializeProjectForAutoSave` before `PUT`.
+- `stores/project/media-slice.ts` — after the existing `saveMediaBlob`, an un-awaited
+  `uploadMedia(mediaId, file, name)` pushes the bytes server-side under the **same mediaId**, so a clip's
+  `mediaId` resolves directly to `/media/:id` on any browser. 8 added lines; a slow upload never blocks
+  the import.
+- `services/component-library-clips.ts` — the localStorage registry is gone. `registerGeneratedMedia`
+  writes to `/component-metadata`, and `refreshRegistry()` hydrates an in-memory cache from the server
+  on panel mount.
+- **New "Projects" tab** in `AssetsPanel` (the same four-touchpoint pattern as the Component Library
+  tab): server project list, "Save to server", and open — which fetches the project JSON, then fetches
+  each media item's bytes and attaches them as real blobs.
+
+### Cross-session verification (the actual point of the stage)
+
+Built a project: footage imported, `stat-counter` generated through the panel ("Cross-session", target
+8888), both placed, saved to the server.
+
+Then **destroyed local state** in the browser: `indexedDB.deleteDatabase()` for every database and
+`localStorage.clear()` / `sessionStorage.clear()`. Confirmed after reload:
+
+- `openreel-db` — the database holding media blobs — **absent**.
+- `localStorage` — **0 keys**.
+- **No recovery dialog was offered at all**, and the app started with "No media imported". So nothing
+  local could have supplied this result.
+
+Opened the project from the **Projects** tab:
+
+| check | result |
+|---|---|
+| Project listed from the server | "New Horizontal Video" |
+| Open result | toast: **"2 media files restored from the server."** |
+| Media items | `footage.mp4` 454,999 B / 6.00s and `stat-counter-Cross-session.webm` 257,560 B / 2.20s, **`isPlaceholder: false`** for both |
+| Clips | stat-counter on Video 1 at 1.02s, footage on Video 2 at 0.02s |
+| Component metadata | `source: component-library`, `componentId: stat-counter`, `renderedFileId: 9.webm`, `background: null`, props intact |
+| Media actually decodes | preview at 2.0s: centre row **283 white pixels** (the counting digits) over **1637 gradient pixels** (the footage), 0 transparent — both streams decoded from server-fetched blobs |
+| Re-render still works | selecting the clip put the panel in re-render mode, "from 9.webm · …", prefilled `label: "Cross-session"`, `targetNumber: 8888` |
+
+### Two bugs found and fixed during the work
+
+1. **CORS preflight killed every upload.** The custom `x-filename` / `x-media-id` / `x-mime-type`
+   headers triggered a preflight that the service rejected, because its hook only allowed
+   `content-type` — surfacing in the browser as a bare `TypeError: Failed to fetch`. The hook now
+   allows those headers and `PUT`/`DELETE`.
+2. **`JSON.stringify` turns a `Blob` into `{}`, which is truthy.** The first save wrote
+   `"blob": {}` for every media item, and the loader's `if (item.blob) return item` would then have
+   skipped fetching bytes — the cross-session test would have "passed" with empty objects. Saves now go
+   through OpenReel's autosave serialiser (drops `blob`, `fileHandle`, `waveformData`, `blob:`
+   thumbnails) and the loader tests `item.blob instanceof Blob`.
+
+### Deferred / known limitations
+
+- **No authentication or access control.** Every project is readable and writable by anyone who can
+  reach the service. Deliberate for this stage.
+- **No conflict handling.** Two people editing one project is last-save-wins, no merge, no warning,
+  not even an `updatedAt` precondition check on `PUT`. An `If-Unmodified-Since`-style guard on
+  `updated_at` would be the cheapest first step when it matters.
+- **Uploads are whole-file, not resumable.** A 2 GB ceiling is configured, but a dropped connection
+  restarts the upload; there is no chunking and no progress reporting to the UI.
+- **`GET /media/:id` sends `accept-ranges: none`** — it streams the whole file rather than honouring
+  range requests, so seeking a large clip re-downloads it. Worth adding range support before anyone
+  works with long footage.
+- **No garbage collection.** Deleting a project leaves its media rows and files on disk, and nothing
+  prunes `component_metadata`.
+- Recommendation if this grows past the prototype: move to Postgres plus object storage with
+  presigned uploads, at which point range requests and chunked/resumable uploads come mostly for free.

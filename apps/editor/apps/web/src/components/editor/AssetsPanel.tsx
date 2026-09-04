@@ -3,7 +3,7 @@ import {
   Image as ImageIcon, Film, Music, Plus, Upload, Trash2,
   Square, Circle, Triangle, Star, ArrowRight, Hexagon, FileCode, AlertTriangle,
   RefreshCw, Palette, Sparkles, Video,
-  Type, Shapes, Wand2, LayoutTemplate, Zap, Shuffle, Boxes,
+  Type, Shapes, Wand2, LayoutTemplate, Zap, Shuffle, Boxes, Server,
 } from "@/icons/lucide-compat";
 import {
   BACKGROUND_PRESETS,
@@ -20,6 +20,7 @@ import { AIGenTab } from "./AIGenTab";
 import { RecipesTab } from "./panels/RecipesTab";
 import { TemplatesTab } from "./panels/TemplatesTab";
 import { ComponentLibraryPanel } from "./panels/ComponentLibraryPanel";
+import { ServerProjectsPanel } from "./panels/ServerProjectsPanel";
 import {
   EffectsPanel,
   TransitionsPanel,
@@ -59,7 +60,8 @@ type AssetsTab =
   | "ai"
   | "recipes"
   | "templates"
-  | "components";
+  | "components"
+  | "projects";
 
 const ASSETS_TABS: ReadonlyArray<{
   value: AssetsTab;
@@ -110,6 +112,11 @@ const ASSETS_TABS: ReadonlyArray<{
     value: "components",
     label: "Component Library",
     description: "Generate animated components and add them to your media.",
+  },
+  {
+    value: "projects",
+    label: "Projects",
+    description: "Open and save projects stored on the server.",
   },
 ] as const;
 
@@ -207,6 +214,7 @@ const TAB_ICONS: Record<AssetsTab, React.ElementType> = {
   recipes: Wand2,
   templates: LayoutTemplate,
   components: Boxes,
+  projects: Server,
 };
 
 const PanelIconButton: React.FC<{
@@ -1522,6 +1530,12 @@ export const AssetsPanel: React.FC = () => {
         return (
           <div className="flex min-h-0 flex-1 flex-col border-t border-border/70 bg-background-secondary content-area-fix">
             <ComponentLibraryPanel />
+          </div>
+        );
+      case "projects":
+        return (
+          <div className="flex min-h-0 flex-1 flex-col border-t border-border/70 bg-background-secondary content-area-fix">
+            <ServerProjectsPanel />
           </div>
         );
       default:
