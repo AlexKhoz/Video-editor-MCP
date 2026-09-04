@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { saveMediaBlob } from "../../../services/media-storage";
+import { uploadMedia } from "../../../services/server-storage";
 import { useProjectStore } from "../../../stores/project-store";
 import { useUIStore } from "../../../stores/ui-store";
 import { toast } from "../../../stores/notification-store";
@@ -312,6 +313,13 @@ export const ComponentLibraryPanel: React.FC = () => {
       if (swapped) {
         await saveMediaBlob(state.project.id, clip.mediaId, file, swapped.metadata);
       }
+
+      // The server still holds the *previous* render's bytes under this mediaId, so
+      // re-upload. Without this, another browser opening the project would fetch the old
+      // clip while its metadata described the new one.
+      await uploadMedia(clip.mediaId, file, file.name).catch((error) => {
+        console.warn("[component-library] could not re-upload the new render:", error);
+      });
 
       const nextMetadata = {
         source: COMPONENT_LIBRARY_SOURCE as typeof COMPONENT_LIBRARY_SOURCE,

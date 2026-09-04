@@ -1173,3 +1173,58 @@ A later `DELETE` of a project whose media was still referenced elsewhere reporte
 - **No pruning of rendered files** in `storage/rendered/` — the sweep covers uploaded media only.
 - Range support does not extend to `GET /files/:name.webm` (the render-service output route), only to
   `/media/:id`.
+
+### Stage 9 definition-of-done — re-run against the hardened code
+
+The cross-session test above was run before the conflict guard changed the save and open paths, so it
+was repeated end to end on current code, starting from an empty server (0 projects, 0 media rows, 0
+files) and adding two pieces of evidence the first run lacked: the HTTP fetches, and a real re-render
+rather than just a prefill check.
+
+**1. Build.** Imported `dod-footage.mp4` (454,999 B), generated `lower-third` through the panel
+("Fresh Machine" / "DoD run", 3s) -> job 10, placed both clips (component on Video 1 at 1.02s, footage
+on Video 2), saved through the Projects panel -> project `92ea2a9f…`. Server then held 2 media rows and
+1 component-metadata row.
+
+**2. Wipe.** `indexedDB.deleteDatabase()` on every database plus `localStorage.clear()` and
+`sessionStorage.clear()`. **`openreel-db` — the media-blob store — deleted**, localStorage 0 keys.
+(`openreel-autosave` could not be dropped because the running app holds a handle, so recovery was then
+declined explicitly, which is stricter: any media had to come from the network.)
+
+**3. Reload and open.** After reload: **no recovery dialog offered at all**, media library empty,
+`openreel-db` still absent. `GET /projects` listed "New Horizontal Video"; opening it produced the
+toast *"2 media files restored from the server."*
+
+The requests the open actually made, from `performance.getEntriesByType("resource")`:
+
+```
+/projects
+/projects/92ea2a9f-5e77-404d-a49e-3ae2254939e8
+/media/00308eba-a010-4125-a130-a722421f1c6e     <- the footage
+/media/55254e37-d50b-499b-9ba8-737be187d990     <- the component
+/component-metadata
+```
+
+(`transferSize` reads 0 on those entries because cross-origin resource timing is opaque without
+`Timing-Allow-Origin`; the decoded pixels below are the real proof that the bytes arrived.)
+
+**4. Evidence.**
+
+| check | result |
+|---|---|
+| Media items | `dod-footage.mp4` 454,999 B / 6.00s and `lower-third-Fresh Machine.webm` 57,225 B / 3.97s, `isPlaceholder: false` for both |
+| Clips | component Video 1 @1.02s, footage Video 2 @0.02s |
+| Component metadata | `source: component-library`, `componentId: lower-third`, `renderedFileId: 10.webm`, `background: null`, props intact |
+| Video decodes | preview at 2.5s: centre row **1920/1920 gradient pixels** (footage, no black box), lower band **880 plate + 12 accent + 1028 gradient** — both streams decoded from server-fetched blobs |
+| Re-render | panel opened in re-render mode ("from 10.webm", prefilled "Fresh Machine" / "DoD run"); changed the title and re-rendered for real -> "Component re-rendered", media renamed, and server metadata moved to `renderedFileId: 11.webm` with the new title |
+
+**A gap the real re-render exposed (now fixed).** After a re-render the server still held the
+*previous* render's bytes: `replaceMediaAsset` swaps the blob locally and `saveMediaBlob` writes the
+local cache, but nothing re-uploaded. Server metadata said `11.webm` while `/media/:id` still returned
+the 57,225-byte "Fresh Machine" file — so a *third* browser would have opened the project and seen the
+old render with new props. `handleRegenerate` now re-uploads after the swap. Verified: a further
+re-render moved the server row to `lower-third-Server Bytes Updated.webm`, **72,929 B**, under the same
+mediaId, with metadata at `renderedFileId: 12.webm` and the matching title — bytes, metadata and disk
+all consistent.
+
+Only the first prefill-only check would have missed this; it took actually pressing re-render.
