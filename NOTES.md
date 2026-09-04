@@ -771,3 +771,42 @@ And the keying still works — sampled from OpenReel's own export at 1.0s, centr
    project is correct. Either re-apply the Chroma Key effect in-session before demoing the preview, or
    demo the exported file. Worth a follow-up alongside the alpha decode patch — both are preview/decode
    plumbing in the same area.
+
+## Stage 6 — end-to-end scenario
+
+Run against a genuinely fresh project, driven through the real UI in a Chromium browser. Project id
+`c9ca4e44-970c-4255-8a6c-fc5db510f8e7`.
+
+| # | Step | Verified how | Result |
+|---|---|---|---|
+| 1 | Create a new project | real interaction — Start Fresh -> Create Horizontal project | empty library ("No media imported"), 1920x1080 |
+| 2 | Import a video, trim it | real interaction — file input, Add to timeline, **Trim end to playhead (W)** at 4.0s | 6s source -> clip `0 - 4.00s`, `outPoint 4.00` |
+| 3 | Generate `animated-text` | real interaction — Component Library, text "End to end", 2s, Generate | job 7 -> `7.webm`, appeared in Project Media |
+| 4 | Second track, sync timing, Chroma Key | real interaction — Add to timeline at playhead 1s, then the Effects **Chroma Key card (double-click)** | component on **Video 1** (top) `1.00 - 3.03s`, video on **Video 2** `0 - 4.00s`, `effects: [chromaKey]` |
+| 5 | Save the project | real interaction — autosave (this build has no explicit Save button; persistence is autosave + Project JSON download) | 3 rotating autosave slots for this project id, newest 3,443 B |
+| 6 | Reload and reopen | real interaction — full page reload -> "We found an unsaved project" -> Recover Project | same project id; component `start 1.00`, `effects [chromaKey]`, full metadata (`componentId`, `props`, `renderedFileId 7.webm`, `background #00ff00`); both media restored, neither a placeholder |
+| 7 | Export the final video | real interaction — Export (MP4 preset), captured through an in-page writable stub | **1,976,509 bytes**, header `ftypisom`, **1920x1080**, **4.00s** |
+
+### Export frame verification
+
+Sampled the centre row of the exported MP4 — the source of truth for this stage, since the live
+preview is affected by the known reload bug:
+
+| time | what should be live | green px | white px | background pixel |
+|---|---|---|---|---|
+| 0.5s | footage only (component starts at 1s) | 0 | 0 | `(233,62,119)` |
+| 2.0s | footage + component | **0** | **356** | `(233,62,119)` |
+| 3.6s | footage only (component ended at 3.03s) | 0 | 0 | `(233,62,119)` |
+
+Zero green anywhere, the gradient footage visible behind the text, and white glyph pixels present only
+while the component clip is live. The compositing is correct in the exported file.
+
+### Preview screenshot
+
+With the Chroma Key effect re-applied in-session (the documented workaround for the reload bug), the
+live preview at 2.0s shows white "End to end" over the blue-to-pink gradient, no green. That extra
+effect application was undone afterwards, so the saved project still carries exactly one
+`chromaKey` effect.
+
+**Definition of Done met**: the scenario reproduces locally with no manual file edits between steps,
+everything lives in one git repository, and the root `README.md` documents running it from scratch.
