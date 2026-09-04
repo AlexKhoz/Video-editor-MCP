@@ -384,7 +384,132 @@ prototype's main friction, `insertMotionInstance` + `variableOverrides` is the e
 
 ## Stage 2 — Motion Canvas components
 
-_pending_
+Motion Canvas 3.17.2 (MIT, as are `@motion-canvas/2d`, `/ui`, `/vite-plugin`, `/ffmpeg`).
+`packages/component-library/` is a standalone npm project — it has its own `node_modules` and is not
+part of any pnpm workspace, so it can be lifted out of this repo unchanged.
+
+### Layout
+
+```
+packages/component-library/
+  components/<id>/meta.json     param schema per component (what the UI reads)
+  src/projects/<id>.ts          makeProject() + defaults, one project per component
+  src/scenes/<id>.tsx           the animation itself
+  src/lib/props.ts              prop injection (URL query, then VITE_COMPONENT_PROPS)
+  src/render-harness.ts         headless render driver (runs in the browser)
+  render-harness.html           page the headless browser loads
+  scripts/render.mjs            CLI: props in, transparent webm out
+  output/                       scratch PNG frames (gitignored)
+```
+
+### Param schema
+
+`meta.json` `type` values deliberately reuse OpenReel's `MotionVariable` vocabulary
+(`packages/core/src/motion/types.ts:990`): **`text | number | color | boolean | media`**.
+So `text` (not "string") for strings. This keeps the format compatible with the
+`insertMotionInstance` + `variableOverrides` fallback described above, should we ever switch.
+Each `meta.json` also names its `project` file and which param is the duration
+(`durationParam`), so the UI can set clip length without hardcoding key names.
+
+### Rendering: there is no Motion Canvas CLI
+
+Worth recording because the original plan assumed one. Findings:
+
+- Motion Canvas ships **no CLI binary** (`npm view @motion-canvas/core bin` -> none). Rendering is
+  designed to run in a browser, driven by the editor UI.
+- `@motion-canvas/ffmpeg` **cannot produce alpha**: its exporter hardcodes MP4 and
+  `-pix_fmt yuv420p` (`node_modules/@motion-canvas/ffmpeg/lib/server/FFmpegExporterServer.js:64-65`).
+- The built-in image-sequence exporter (`@motion-canvas/core/image-sequence`) **does** keep alpha, but
+  it only works with a Vite dev server: it ships each frame over the HMR channel
+  (`import.meta.hot.send('motion-canvas:export', ...)`) and the Vite plugin writes the PNGs to disk.
+
+So `scripts/render.mjs` builds the pipeline the missing CLI would have provided:
+
+1. start a Vite dev server programmatically (random port);
+2. launch **headless Chrome** via `puppeteer-core` (Apache-2.0, no bundled Chromium download — it uses
+   the system Chrome/Edge; override with `CHROME_PATH`);
+3. load `render-harness.html?project=<id>&props=<json>&fps=&width=&height=`, which constructs
+   `new Renderer(project)` and calls `render()` with `background: null` and the image-sequence exporter;
+4. Vite writes `output/<id>/000000.png` … (PNG, alpha preserved);
+5. our own ffmpeg muxes them: `libvpx-vp9 -pix_fmt yuva420p -b:v 0 -crf 28 -auto-alt-ref 0`,
+   matching OpenReel's own `webm-alpha` export target;
+6. delete the PNG scratch frames (`--keep-frames` to keep them).
+
+Exact command:
+
+```bash
+node scripts/render.mjs --component animated-text \
+  --props '{"text":"Ship it","color":"#ffcc00","durationInSeconds":2}' \
+  --out ../../storage/rendered/demo.webm
+```
+
+Flags: `--component --props --out --fps (30) --width (1920) --height (1080) --keep-frames`.
+Everything is local: Vite, Chrome, ffmpeg. No API keys, no cloud.
+
+### The three components render, verified
+
+| Component | Props used | Frames | Output | Peak mean alpha |
+|---|---|---|---|---|
+| `animated-text` | text "Stage 2", `#ffcc00`, 2s | 61 @30fps | 104,110 B | 2.99 (small glyph coverage) |
+| `logo-reveal` | `#22d3ee`, 2.5s | 89 @30fps | 52,916 B | 20.96 (badge covers more) |
+| `color-transition` | `#ef4444` -> `#3b82f6`, 1.5s | 46 @30fps | 12,302 B | 255 (full-frame overlay) |
+
+All three: VP9, 1920x1080, WebM tag `alpha_mode=1`. Verified with
+`ffprobe -show_entries stream_tags=alpha_mode` and by measuring the alpha plane frame by frame:
+
+```bash
+ffmpeg -c:v libvpx-vp9 -i file.webm \
+  -vf "alphaextract,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-" -f null -
+```
+
+For `animated-text` the mean alpha traces the animation exactly: 0 -> 2.99 (hold) -> 1.05 -> 0.
+
+### Alpha compatibility with OpenReel: import works, compositing does NOT
+
+This was checked before building anything on top of it, and it turned up a real problem.
+
+**What works.** OpenReel imports the file cleanly. Its probe of `animated-text.webm` read
+`codec vp9, 1920x1080, duration 2.033333, frameRate 30, hasVideo true, hasAudio false`,
+`isPlaceholder` false — all correct. The clip behaves like any other: it lands in the media library,
+drops on a track, trims, and exports.
+
+**What does not.** **OpenReel's decode path drops the alpha channel.** Stacked
+`animated-text` (top track) over the opaque `color-transition` (lower track) and exported: at a time
+where both clips are live, the frame shows the text glyphs at exactly `255,204,0` — and everywhere
+else **pure black**, not the layer underneath. The reverse stacking gave the mirror image: the opaque
+clip covered the text entirely. So each video layer is composited opaquely; a transparent region
+becomes black.
+
+**The file is not at fault.** The same webm decoded through a plain `<video>` element in the same
+browser and drawn to a 2D canvas gives corner RGBA `(0,0,0,0)` — fully transparent — with only 220
+non-transparent pixels across the centre row (the glyphs). Chrome decodes our alpha correctly;
+OpenReel's pipeline is what loses it. Cause: OpenReel extracts frames through WebCodecs/mediabunny
+(`packages/core/src/video/video-engine.ts`, no `alpha` handling anywhere in it), and VP9 alpha in WebM
+lives in per-block side data that WebCodecs does not reconstruct. Note the asymmetry: OpenReel can
+*encode* `webm-alpha` but cannot *decode* it.
+
+Useful adjacent finding: **track order is reversed for rendering** —
+`getVisibleTrackRenderOrder` (`packages/core/src/timeline/timeline-items.ts:62-68`) reverses the
+array, so **"Video 1" (index 0) is the topmost layer**, not the bottom one. Also, "Add to timeline"
+inserts at the playhead, not at 0.
+
+**Options for Stage 4** (needs a product decision, none blocks Stage 3):
+
+1. *Patch the fork's decode path* — draw alpha-carrying WebM clips from an `HTMLVideoElement` instead
+   of WebCodecs frames (proven above to preserve alpha) for clips whose media is tagged
+   `alpha_mode=1`. Contained change, keeps the architecture and true transparency. Most work.
+2. *Chroma key* — render components over a green background and lean on OpenReel's existing per-clip
+   `chromaKey` / green-screen feature (`Clip.chromaKey`, `GreenScreenSection.tsx`). Zero core changes,
+   works today, but edge quality suffers and it is a hack.
+3. *Accept opaque components* for the prototype — put them on the top track with their own designed
+   background. Cheapest, but gives up the overlay use case that motivates the library.
+4. *Switch to the native motion path* — `insertMotionInstance` + `variableOverrides` renders live with
+   real alpha and never touches a decoder. Trades away the portability that justified Motion Canvas
+   (see the Motion Design section above); still the documented fallback if the decode patch proves
+   expensive or render latency bites.
+
+Recommendation: keep Stage 3 as planned (nothing here affects the render-service), and take option 1
+at Stage 4 with option 2 as the fallback if the patch turns out to be larger than it looks.
 
 ## Stage 3 — render-service
 
