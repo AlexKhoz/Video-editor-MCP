@@ -5,6 +5,7 @@ import { pipeline } from "node:stream/promises";
 import { randomUUID } from "node:crypto";
 
 import { config } from "./config.js";
+import { probeMedia } from "./probe.js";
 import {
   deleteMediaRow,
   deleteProject,
@@ -185,12 +186,22 @@ export async function registerStorageRoutes(app) {
       return reply.code(400).send({ error: "Upload was empty" });
     }
 
+    // Probe server-side so headless callers (ops API, MCP server) get the same metadata
+    // the browser's importMedia would have produced — they need it for the add_media op.
+    let metadata = null;
+    try {
+      metadata = await probeMedia(storagePath);
+    } catch (error) {
+      app.log.warn(`ffprobe failed for ${filename}: ${error.message}`);
+    }
+
     const record = insertMedia({
       id,
       filename,
       storagePath,
       mimeType: String(request.headers["x-mime-type"] ?? "application/octet-stream"),
       size,
+      metadata,
     });
 
     return reply.code(201).send({ ...record, url: `/media/${id}` });

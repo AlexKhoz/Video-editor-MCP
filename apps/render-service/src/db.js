@@ -57,6 +57,13 @@ export function getDb() {
     CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC);
   `);
 
+  // Added after the table shipped, so tolerate an existing column.
+  try {
+    db.exec("ALTER TABLE media ADD COLUMN metadata TEXT");
+  } catch {
+    // already present
+  }
+
   return db;
 }
 
@@ -138,20 +145,22 @@ export function deleteMediaRow(id) {
 
 /* ------------------------------------------------------------------- media */
 
-export function insertMedia({ id, filename, storagePath, mimeType, size }) {
+export function insertMedia({ id, filename, storagePath, mimeType, size, metadata }) {
   const now = Date.now();
+  const encoded = metadata ? JSON.stringify(metadata) : null;
   getDb()
     .prepare(
-      `INSERT INTO media (id, filename, storage_path, mime_type, size, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO media (id, filename, storage_path, mime_type, size, created_at, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          filename = excluded.filename,
          storage_path = excluded.storage_path,
          mime_type = excluded.mime_type,
-         size = excluded.size`,
+         size = excluded.size,
+         metadata = excluded.metadata`,
     )
-    .run(id, filename, storagePath, mimeType, size, now);
-  return { id, filename, mimeType, size, createdAt: now };
+    .run(id, filename, storagePath, mimeType, size, now, encoded);
+  return { id, filename, mimeType, size, createdAt: now, metadata: metadata ?? null };
 }
 
 export function getMedia(id) {
@@ -164,12 +173,13 @@ export function getMedia(id) {
     mimeType: row.mime_type,
     size: row.size,
     createdAt: row.created_at,
+    metadata: row.metadata ? JSON.parse(row.metadata) : null,
   };
 }
 
 export function listMedia(limit = 200) {
   return getDb()
-    .prepare("SELECT id, filename, mime_type, size, created_at FROM media ORDER BY created_at DESC LIMIT ?")
+    .prepare("SELECT id, filename, mime_type, size, created_at, metadata FROM media ORDER BY created_at DESC LIMIT ?")
     .all(limit)
     .map((row) => ({
       id: row.id,
@@ -177,6 +187,7 @@ export function listMedia(limit = 200) {
       mimeType: row.mime_type,
       size: row.size,
       createdAt: row.created_at,
+      metadata: row.metadata ? JSON.parse(row.metadata) : null,
     }));
 }
 

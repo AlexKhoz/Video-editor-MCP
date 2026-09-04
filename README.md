@@ -15,10 +15,15 @@ local filesystem; the job queue is Redis in Docker.
 
 ```
 apps/editor                  fork of OpenReel Video (MIT) + the Component Library panel
-apps/render-service          Fastify + BullMQ: componentId + props -> rendered webm
+apps/render-service          Fastify + BullMQ: renders, storage API, ops API, exports
+apps/mcp-server              MCP server exposing all of it as tools for Claude
 packages/component-library   Motion Canvas scene-components + meta.json param schemas
+packages/project-kit         pure-JSON project manipulation (no browser, no DOM)
 infra/docker-compose.yml     Redis (job queue)
-storage/rendered/            rendered output files
+storage/rendered/            rendered component files
+storage/media/               uploaded media, keyed by mediaId
+storage/exports/             finished MP4 exports
+storage/video-editor.sqlite  SQLite: projects, media, component_metadata
 NOTES.md                     engineering notes, findings and verification per stage
 ```
 
@@ -83,7 +88,27 @@ cd apps/editor && pnpm install --filter "@openreel/web..." && pnpm --filter @ope
 ```
 
 Open <http://localhost:5173>, pick a format, and the editor loads. The **Component Library** tab is in
-the left rail.
+the left rail; **Projects** is the server-side project list.
+
+**5. Headless exports** (only needed for the ops/MCP export path)
+
+```bash
+cd apps/render-service && npm run export-worker
+```
+
+Drives the real editor in a headless Chrome via `window.__openreelAutomation`, so it needs the editor
+dev server from step 4 to be running.
+
+## Driving it from Claude (MCP)
+
+```bash
+cd apps/mcp-server && npm install
+claude mcp add video-editor --scope user -- node E:/Replika/Tools/video-editor/apps/mcp-server/src/index.js
+```
+
+Nine tools — render a component, upload footage, create a project, edit the timeline, export an MP4 —
+all over the render-service HTTP API. Tool list, `claude_desktop_config.json` snippet and the
+concurrency story: [apps/mcp-server/README.md](apps/mcp-server/README.md).
 
 ## The end-to-end flow
 
@@ -125,6 +150,11 @@ cd packages/component-library && node scripts/render.mjs --component animated-te
 Renders a component straight from the CLI, bypassing the queue. Add `--background "#00ff00"` for a
 chroma render; omit it for a transparent (VP9 + `yuva420p`) one.
 
+```bash
+cd packages/project-kit && npm test    # 13 tests, pure JSON, no services needed
+cd apps/mcp-server && npm test         # 5 tests over a real stdio round-trip
+```
+
 ## Known limitations
 
 Documented with evidence in [NOTES.md](NOTES.md):
@@ -134,13 +164,19 @@ Documented with evidence in [NOTES.md](NOTES.md):
   Chroma Key effect in-session refreshes it. The cause is pinned — the preview reads effects from an
   in-memory bridge that nothing rehydrates (see Stage 7 in NOTES.md) — but the obvious fix made the
   preview worse and was reverted, so this is still open.
-- **Alpha is fixed** (Stage 7): a one-line `alpha: true` on the export decoder's mediabunny sink means
-  transparent (VP9 `alpha_mode=1`) clips now composite over lower tracks in the export instead of
-  arriving as a black rectangle; the preview always handled them. Components are still rendered on
-  chroma green because that is the path Stages 4-6 verified end to end — switching the panel to true
-  transparency is now a one-line change, pending re-verification.
+- **No authentication anywhere.** Every project on the server is readable and writable by anyone who
+  can reach render-service — including through the ops API and the MCP server. That is deliberate
+  while everything is localhost-only, and it is the one item that **must be closed before any of this
+  is reachable from another machine**.
+- **Last-save-wins by default.** The editor and the MCP server send the `updatedAt` they last saw and
+  get a 409 on a conflict, but a client that omits the guard still overwrites.
+- Uploads are whole-file and not resumable; `storage/rendered/` and `storage/exports/` are never
+  pruned; exports run one headless Chrome at a time with no cancellation.
+- Edits made through the ops API or MCP bypass the editor's undo/redo, and an open editor tab needs a
+  reload to see them.
 
 ## Licences
 
 OpenReel Video is MIT. Motion Canvas is MIT. Added dependencies: Fastify (MIT), BullMQ (MIT), ioredis
-(MIT), puppeteer-core (Apache-2.0). Redis 7 is BSD-3-Clause.
+(MIT), puppeteer-core (Apache-2.0), `@modelcontextprotocol/sdk` (MIT), zod (MIT). Redis 7 is
+BSD-3-Clause. SQLite is via `node:sqlite`, in Node core — no dependency.

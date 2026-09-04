@@ -1,0 +1,20 @@
+{
+  "name": "@video-editor/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server exposing the video editor's render-service as tools for Claude",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "video-editor-mcp": "src/index.js"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.0"
+  }
+}

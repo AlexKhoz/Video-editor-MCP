@@ -1360,3 +1360,111 @@ Keying from a JSON-carried effect was already proven in Stage 6 with a green cli
 - `render_preview_frame` (a single-frame version for agent feedback) is not implemented.
 - The ops API has no undo/redo: agent edits do not appear in the editor's history.
 - Exports are never pruned; `storage/exports/` grows.
+
+## Stage 11 — MCP server
+
+`apps/mcp-server` — a stdio MCP server exposing the render-service operations as tools for
+Claude. Dependencies: `@modelcontextprotocol/sdk` (MIT) and `zod` (MIT).
+
+**Kept independent on purpose**: every tool is a wrapper over one render-service HTTP
+endpoint. `src/service.js` is a ~120-line fetch client; nothing imports project-kit,
+render-service modules or the editor. The only coupling is the HTTP contract.
+
+Package README (`apps/mcp-server/README.md`) carries the config snippets and the tool
+table; this section records what was decided and what was verified.
+
+### The nine tools
+
+`list_components`, `generate_component`, `upload_media`, `list_projects`, `create_project`,
+`load_project`, `apply_project_ops`, `export_project`, `service_health`.
+
+Three decisions worth recording:
+
+1. **Long jobs poll inside the tool.** `generate_component` and `export_project` queue the
+   job then poll to completion (10 and 30 minute ceilings), returning one answer. Exposing
+   `job_status` instead would make the model spend turns polling — and, worse, invite it to
+   report success on a `waiting` status.
+2. **The op vocabulary lives in `apply_project_ops`'s description** (the `OPS_VOCABULARY`
+   block, ~60 lines). It states the two things that cost real debugging time earlier:
+   "Video 1" is the **top** track, and `add_text_clip`'s `transform.position` is
+   **normalised 0-1** while clip transforms are pixel offsets.
+3. **Errors are translated, not forwarded.** A 409 becomes "call `load_project`, then apply
+   your operations again"; a 400 becomes the failing op's index, message and project-kit
+   code plus the words "nothing was saved".
+
+Conflict handling: `apply_project_ops` does a **load-then-write** — reads the project's
+current `updatedAt`, sends it as `expectedUpdatedAt`. That protects against a stale read
+inside the call, not against a change landing between two of the model's calls; retrying is
+always safe, but retrying after a *successful* call applies the ops twice.
+
+### Service addition: ffprobe on upload
+
+`POST /media` now probes uploads server-side (`apps/render-service/src/probe.js`) and stores
+the result in the `media.metadata` column, returning it in the response. Without this a
+headless caller would need local ffmpeg to fill in `add_media`'s `metadata` — and a clip
+whose media has no metadata has no duration to fall back on. The shape matches exactly what
+the browser's `importMedia` produces.
+
+### Gotchas
+
+- **stdout is the protocol channel.** The startup line goes to stderr. One `console.log`
+  in a tool handler corrupts the session.
+- Importing the SDK by absolute Windows path in a verification script needs a `file:///`
+  URL, and the real ESM entry (`dist/esm/client/index.js`), not the package root.
+- The first e2e run failed at step 4 with `Cannot read properties of undefined (reading
+  'duration')` — render-service was still running the pre-ffprobe code. Restarting it fixed
+  it. Reloading a Fastify service is not automatic; check the process, not the file.
+
+### Verification
+
+`npm test` in the package: 5 tests over a real stdio round-trip (all nine tools advertised,
+every description substantial, the full op vocabulary documented, required params declared,
+both long tools stating that they block). Passes.
+
+End-to-end: `scratchpad/mcp-e2e.mjs` drives the server with the SDK's own `Client` +
+`StdioClientTransport`, in the order Claude would, and checks every payload. Exit 0.
+
+| step | tool | result |
+|---|---|---|
+| 1 | `service_health` | status=ok, redis=up |
+| 2 | `list_components` | 6 components |
+| 3 | `generate_component` (lower-third) | `16.webm`, 62,271 bytes, 119 frames, downloaded locally |
+| 4 | `upload_media` x2 | footage 5.00s audio=true; component 3.97s 1920x1080 — metadata from server-side ffprobe |
+| 5 | `create_project` | project + top trackId returned |
+| 6 | `apply_project_ops` | media + second track; then footage clip (Video 2, 0-4s) and component clip (Video 1, 0.5-3.5s) |
+| 7 | `apply_project_ops` | `brightness` effect on the component clip + an "MCP" text clip at 3.0-4.0s |
+| 8 | `apply_project_ops` (invalid) | rejected: `isError=true :: Error: ops[1] (add_clip): Track ghost-track not found [TRACK_NOT_FOUND] — nothing was saved.` |
+| 9 | `load_project` | `Video 1: start=0.5 dur=3 effects=["brightness"]`, `Video 2: start=0 dur=4 effects=[]`, `textClips: [{text:"MCP", startTime:3, duration:1}]`, duration 4s |
+| 10 | `export_project` | `4.mp4`, 2,438,435 bytes, 16.6s |
+
+`4.mp4`: h264 1920x1080, **120 frames**, duration **4.010667s**, **aac 48000 Hz/2ch**,
+`mean_volume -24.1 dB / max_volume -17.5 dB`.
+
+Frame sampling — two scan rows, one across the lower-third's band and one across the
+centre, counting white / dark-stroke / footage-gradient pixels:
+
+```
+t=0.2  corner=(253,158,13) | lower-third band w/d/g= 0 0 960   | centre w/d/g= 0 0 960
+t=2.0  corner=(251,158,12) | lower-third band w/d/g= 0 440 520 | centre w/d/g= 0 0 960
+t=3.5  corner=(252,159,13) | lower-third band w/d/g= 0 0 960   | centre w/d/g= 109 7 844
+```
+
+Reading it: at 0.2s only footage (the component starts at 0.5s). At 2.0s the lower-third's
+**dark plate covers 440 px of its band** — the component is composited over the footage,
+with alpha, in its own band and nowhere else. At 3.5s the component has just ended (band
+clean again) and the **"MCP" text clip appears in the centre (109 white + 7 stroke px)**.
+That is precisely the timeline the MCP tools built, and none of it was touched by hand.
+
+Same caveat as Stage 10, restated: the `brightness` effect is carried and processed (stored
+in the project, export completed through the effect path) but a frame count does not prove
+its magnitude.
+
+### Deferred
+
+- **Auth — unchanged and still the blocker.** This server adds no auth of its own and calls
+  a no-auth localhost service. Registering it in a Claude client means any tool call can
+  read or overwrite any project. Must be closed before render-service is reachable beyond
+  this machine.
+- `upload_media` reads local paths with the privileges of whoever runs the server.
+- No `render_preview_frame`; the model cannot see a frame without a full export.
+- Tool edits bypass undo/redo, and an editor tab with the project open needs a reload.
