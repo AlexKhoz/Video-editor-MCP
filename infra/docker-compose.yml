@@ -1,0 +1,21 @@
+name: video-editor-infra
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: video-editor-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      # Bound to loopback: this is a local dev queue, not a network service.
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  redis-data:

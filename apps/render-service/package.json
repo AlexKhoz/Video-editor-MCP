@@ -1,0 +1,18 @@
+{
+  "name": "@video-editor/render-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Queues Motion Canvas component renders and serves the resulting transparent webm files",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "worker": "node src/worker.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "bullmq": "^6.3.4",
+    "fastify": "^5.12.3"
+  }
+}

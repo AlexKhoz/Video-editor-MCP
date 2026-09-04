@@ -493,6 +493,22 @@ Useful adjacent finding: **track order is reversed for rendering** —
 array, so **"Video 1" (index 0) is the topmost layer**, not the bottom one. Also, "Add to timeline"
 inserts at the playhead, not at 0.
 
+### Gotchas to remember during Stage 4 manual testing
+
+Small, but each one will waste an hour if forgotten:
+
+- **"Video 1" is the TOP layer, not the bottom.** `getVisibleTrackRenderOrder`
+  (`packages/core/src/timeline/timeline-items.ts:62-68`) reverses the track array before rendering,
+  so track index 0 composites last, i.e. on top. A component dropped on "Video 1" covers everything
+  below it.
+- **"Add to timeline" inserts at the playhead, not at 0.** Two clips added one after another both
+  landed at 0.9s because that is where the playhead happened to sit. Park the playhead at 0 before
+  testing, or expect offsets.
+- Hovering a media card is what reveals its per-item **"Add to timeline" / "Delete"** buttons; they
+  are not in the DOM until then. Double-clicking a card adds it too, but only via real pointer events.
+- The preview canvas does not repaint while the browser pane is hidden, so pixels sampled from it can
+  be stale. Export a frame instead when you need deterministic output.
+
 **Options for Stage 4** (needs a product decision, none blocks Stage 3):
 
 1. *Patch the fork's decode path* — draw alpha-carrying WebM clips from an `HTMLVideoElement` instead
@@ -513,4 +529,67 @@ at Stage 4 with option 2 as the fallback if the patch turns out to be larger tha
 
 ## Stage 3 — render-service
 
-_pending_
+Fastify 5.12.3 + BullMQ 6.3.4 (both MIT) in `apps/render-service`, Redis 7-alpine from
+`infra/docker-compose.yml`. Storage is the local filesystem (`storage/rendered/`) — no object store.
+
+### Shape
+
+```
+apps/render-service/
+  src/config.js      paths + env-var configuration
+  src/components.js  reads packages/component-library/components/*/meta.json, validates props
+  src/queue.js       BullMQ queue + BullMQ-state -> API-status mapping
+  src/server.js      HTTP API (producer)
+  src/worker.js      queue consumer; shells out to the Stage 2 render script
+  test/render-e2e.test.js
+```
+
+Server and worker are **separate processes**: a render holds a headless Chrome and an ffmpeg for tens
+of seconds, and the API has to stay responsive. Redis is bound to `127.0.0.1:6379` only — it is a
+local dev queue, not a network service.
+
+### API
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | service + Redis status; **503** when Redis is unreachable, with the compose command as a hint |
+| `GET` | `/components` | the catalogue, straight from each `meta.json` (this is what the Stage 4 panel will list) |
+| `POST` | `/render` | `{ componentId, props, fps?, width?, height? }` -> `202 { jobId, status: "pending", props }` |
+| `GET` | `/render/:jobId` | `{ status, progress, … }`; when done also `file`, `url`, `bytes`, `frames`, `durationInSeconds` |
+| `GET` | `/files/:name.webm` | streams the rendered file (this is how the editor will pull it into its media library) |
+
+Status values are exactly the four the plan asked for. BullMQ's richer state set is collapsed in
+`toApiStatus()`: `waiting | delayed | prioritized | paused | waiting-children` -> `pending`,
+`active` -> `processing`, `completed` -> `done`, `failed` -> `failed`.
+
+Props are validated against the component's `meta.json` *before* a job is queued — unknown keys are
+dropped and echoed back as `ignoredProps`, missing keys take their defaults, numbers are range-checked
+against `min`/`max`, colours must be hex. Bad input gets a `400` listing every problem, so the Stage 4
+form can show them inline. The validator switches on the same `MotionVariable` type vocabulary the
+`meta.json` files use (`text | number | color | boolean | media`).
+
+### Worker
+
+The worker does **not** reimplement the render pipeline: it spawns
+`packages/component-library/scripts/render.mjs` with `--component`, `--props`, `--out`, `--fps`,
+`--width`, `--height`, and writes to `storage/rendered/<jobId>.webm`. That script is already verified
+(Stage 2) to produce a correct alpha channel, so reusing it keeps one implementation of the
+Vite + Chrome + ffmpeg chain. The worker adds a kill-switch timeout (`RENDER_TIMEOUT_MS`, default
+10 min), progress updates, an empty-file guard, and parses the frame count out of the script's stdout.
+
+Concurrency defaults to 1 (`WORKER_CONCURRENCY`).
+
+### Configuration
+
+All optional env vars: `PORT` (3001), `HOST` (127.0.0.1), `REDIS_HOST`, `REDIS_PORT`, `QUEUE_NAME`,
+`RENDER_STORAGE_DIR`, `COMPONENT_LIBRARY_DIR`, `WORKER_CONCURRENCY`, `RENDER_TIMEOUT_MS`,
+`RENDER_FPS`, `RENDER_WIDTH`, `RENDER_HEIGHT`, `LOG_LEVEL`.
+
+### Test
+
+`npm test` in `apps/render-service` (node:test): lists the catalogue and asserts every param type is
+in the MotionVariable vocabulary, rejects an unknown component (404) and bad props (400 with two
+specific messages), then renders `animated-text` with custom text through the real API — polling
+`/render/:jobId` until it settles — and asserts the file exists, is non-empty, matches the reported
+byte count, downloads over HTTP as `video/webm`, and starts with WebM's EBML magic bytes
+(`1A 45 DF A3`). Requires Redis, ffmpeg and Chrome.
