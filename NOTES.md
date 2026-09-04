@@ -1228,3 +1228,135 @@ mediaId, with metadata at `renderedFileId: 12.webm` and the matching title — b
 all consistent.
 
 Only the first prefill-only check would have missed this; it took actually pressing re-render.
+
+## Stage 10 — headless project manipulation API
+
+Foundation for an MCP agent: a program can build, edit and export a project with no human
+in a browser.
+
+> **NO AUTHENTICATION.** These endpoints let any caller rewrite or export any project —
+> materially more exposure than the human UI, which at least needs someone clicking. This
+> is acceptable **only** while everything is bound to localhost. **It must be closed before
+> the service is reachable by anyone but us.** Flagged again here because Stage 10 is the
+> point where the risk changes character.
+
+### The three pre-implementation checks
+
+**1. Transition param shapes — no gap.**
+`Transition { id, clipAId, clipBId?, edge?: "in"|"out", type, duration, params }`
+(`packages/core/src/types/timeline.ts:274`). **`params` may be `{}`**: the editor's own
+`transition/add` writes exactly that (`action-executor.ts:1672`), and every branch of
+`transition-engine.ts` reads its options with a default — `direction` ("left"),
+`softness` (0), `holdDuration` (0), `scale` (2), `center`, `intensity` (?? 1), plus a global
+`curve`. `edge` anchors a transition to one clip's edge with `clipBId` omitted. Transitions
+live on the track that owns `clipAId`.
+
+**2. Text-clip round-trip — works.** A `textClips[]` entry authored purely as JSON loaded
+("JSON TEXT" appeared in the editor UI) and rendered in a headless export: at 2.5s the
+centre row had **171 white text pixels + 11 dark stroke pixels** over the footage, and none
+at 0.5s or 4.5s — its 1s–4s window honoured exactly.
+
+**3. Audio in a headless export — survives.** Footage with a real aac track exported to
+**aac 48000 Hz / 2ch, 5.01s, mean_volume -24.1 dB / max -17.5 dB** (i.e. not silence). The
+source was 44100 Hz mono and came out 48 kHz stereo — resampled to the project's
+`settings`, as expected.
+
+A fourth finding shaped the design: **the export backend requires a writable stream.**
+`webcodecs-backend.ts:54` throws "No writable stream provided" and has no in-memory target,
+so the automation hook hands `exportVideo()` its own memory writable rather than
+monkey-patching `showSaveFilePicker`.
+
+### What shipped
+
+**`packages/project-kit`** — pure JSON operations, no dependencies, importable by the
+service without a build step. Every function returns a *new* project; nothing mutates in
+place, which is what makes a batch atomic. Validation is ported from
+`packages/core/src/actions/action-validator.ts`: track exists / not locked, clip exists,
+finite non-negative times, in/out inside the source media, and an overlap check that can be
+waived with `allowOverlap`. `addClip` mirrors the store's duration fallback (explicit →
+media duration → 5s default for stills). 13 unit tests cover defaults, overlap refusal,
+split arithmetic, effect replace-by-type, transition-type validation, text clips landing in
+the top-level array, and atomic rollback.
+
+Operations: `add_track`, `add_media`, `add_clip`, `trim_clip`, `move_clip`, `split_clip`,
+`remove_clip`, `set_effect`, `remove_effect`, `set_clip_transform`, `add_text_clip`,
+`add_transition`, `rename_project`.
+
+**render-service** gained:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/projects/new` | create an empty valid project server-side |
+| `POST` | `/projects/:id/ops` | apply an operation list atomically; honours `expectedUpdatedAt` |
+| `POST` | `/projects/:id/export` | queue a headless export |
+| `GET` | `/export/:jobId` | `pending \| processing \| done \| failed`, then `file`/`url`/`bytes` |
+| `GET` | `/exports/:file` | the exported mp4 |
+
+`ops` results echo the ids of everything created, so an agent can chain steps (add a clip,
+then trim *that* clip) without a second round trip to read the project.
+
+**`src/export-worker.js`** — a second BullMQ worker (own queue `project-exports`,
+concurrency 1, since export runs at roughly real time). It drives headless Chrome through
+**`window.__openreelAutomation`** (`apps/web/src/services/automation.ts`, installed by
+`EditorInterface`): `loadProjectById` → `startExport` → poll `getExportState` →
+`takeExportBase64`, written to `storage/exports/<jobId>.mp4`.
+
+Two details worth keeping:
+- The worker navigates to **`#/editor`**, which mounts the editor directly and skips the
+  welcome launcher. The first attempt hit `Waiting failed: 90000ms exceeded` because the
+  hook lives in `EditorInterface`, which does not mount while the launcher is showing.
+- No aria-label scraping and no `showSaveFilePicker` patching anywhere in the worker.
+
+### End-to-end verification
+
+An agent-shaped script (`scratchpad/e2e-stage10.mjs`) built a project **entirely through the
+API** — no hand-written project JSON:
+
+1. `POST /projects/new` → project + first track.
+2. `POST /render` (Stage 3 queue) → `13.webm`, downloaded.
+3. `POST /media` ×2 with ffprobe metadata.
+4. Three `ops` batches: add both media, add a second track, add the footage clip, **trim it
+   5s → 4s**, **move it** to the lower track, add the **component clip** on the top track
+   with its `component-library` metadata, **set a chromaKey effect** on it, and add a
+   **text clip**.
+5. `POST /projects/:id/export`, polled to completion.
+
+Guard behaviour, checked in the same run:
+
+- stale `expectedUpdatedAt` → **HTTP 409** (no write).
+- a batch whose second op is invalid → **HTTP 400**, and the project name was unchanged:
+  **atomic: true**.
+
+Stored project after the batches — exactly what was asked for:
+
+```
+name: Agent Built | duration: 4
+  Video 1: start=1 dur=2 in/out=0/2 effects=['chromaKey'] src=stat-counter
+  Video 2: start=0 dur=4 in/out=0/4 effects=[]
+  textClips: [('OPS API', 2.5, 1.5)]
+```
+
+Export: **`3.mp4`, 2,638,625 bytes, produced in 11.9s**; h264 1920x1080, **120 frames**,
+duration **4.01s** (matching the ops-set trim), plus **aac 48000 Hz/2ch at mean -24.1 dB**.
+
+Frame sampling (centre row, 2px stride):
+
+| time | expected | white | dark stroke | footage |
+|---|---|---|---|---|
+| 0.4s | footage only | 0 | 0 | 960 |
+| 2.0s | + stat-counter | **73** | 0 | 887 |
+| 3.2s | + "OPS API" text (component ended) | **22** | **15** | 923 |
+
+One precise caveat: the `chromaKey` effect is *carried and processed* (it is in the stored
+project and the export completed through the effect path) but this scenario cannot prove it
+*keys* anything, because the component was rendered with true alpha and contains no green.
+Keying from a JSON-carried effect was already proven in Stage 6 with a green clip.
+
+### Deferred
+
+- **Auth** — see the banner above. This is the item that should block any non-localhost use.
+- One Chrome per export, concurrency 1; a 4s timeline took ~12s, so long timelines are
+  minutes. No cancellation endpoint yet.
+- `render_preview_frame` (a single-frame version for agent feedback) is not implemented.
+- The ops API has no undo/redo: agent edits do not appear in the editor's history.
+- Exports are never pruned; `storage/exports/` grows.

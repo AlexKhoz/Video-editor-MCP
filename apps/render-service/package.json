@@ -9,11 +9,13 @@
   "scripts": {
     "start": "node src/server.js",
     "worker": "node src/worker.js",
+    "export-worker": "node src/export-worker.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "bullmq": "^6.3.4",
     "fastify": "^5.12.3",
+    "puppeteer-core": "^25.10.0",
     "ioredis": "^6.0.0"
   }
 }

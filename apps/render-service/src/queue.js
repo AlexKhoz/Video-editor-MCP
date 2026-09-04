@@ -21,6 +21,18 @@ export function createQueue() {
   });
 }
 
+/** Headless project exports (Stage 10) — separate queue so one Chrome runs at a time. */
+export function createExportQueue() {
+  return new Queue(config.exportQueueName, {
+    connection: redisConnection,
+    defaultJobOptions: {
+      attempts: 1,
+      removeOnComplete: false,
+      removeOnFail: false,
+    },
+  });
+}
+
 /**
  * Maps BullMQ's internal states onto the four the API promises:
  * pending | processing | done | failed.

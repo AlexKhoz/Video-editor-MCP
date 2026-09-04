@@ -17,3 +17,4 @@ storage/media/
 storage/*.sqlite
 storage/*.sqlite-shm
 storage/*.sqlite-wal
+storage/exports/

@@ -4,6 +4,7 @@ import { ToolcraftText as Text } from "@openreel/ui";
 import { Toolbar } from "./Toolbar";
 import { EditorActionRail } from "./EditorActionRail";
 import { AssetsPanel } from "./AssetsPanel";
+import { installAutomationHook } from "../../services/automation";
 import { Preview } from "./Preview";
 import { InspectorPanel } from "./InspectorPanel";
 import { Timeline } from "./Timeline";
@@ -75,6 +76,13 @@ const clamp = (value: number, min: number, max: number): number => {
 /**
  * Auto-save initialization hook
  */
+/** Exposes window.__openreelAutomation for headless drivers (Stage 10). */
+const useAutomationHook = () => {
+  useEffect(() => {
+    installAutomationHook();
+  }, []);
+};
+
 const useAutoSave = () => {
   const { initializeAutoSave } = useProjectStore();
 
@@ -216,6 +224,7 @@ export const EditorInterface: React.FC = () => {
   const { showShortcutsOverlay, setShowShortcutsOverlay } =
     useKeyboardShortcuts();
   useAutoSave();
+  useAutomationHook();
 
   const {
     keyframeEditorOpen,

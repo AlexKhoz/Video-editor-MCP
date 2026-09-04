@@ -19,6 +19,11 @@ export const config = {
     ? path.resolve(process.env.DB_PATH)
     : path.join(REPO_ROOT, "storage", "video-editor.sqlite"),
 
+  /** Where headless project exports land. */
+  exportDir: process.env.EXPORT_DIR
+    ? path.resolve(process.env.EXPORT_DIR)
+    : path.join(REPO_ROOT, "storage", "exports"),
+
   /** Where uploaded media bytes live, server-side. */
   mediaDir: process.env.MEDIA_DIR
     ? path.resolve(process.env.MEDIA_DIR)
@@ -41,6 +46,18 @@ export const config = {
   },
 
   queueName: process.env.QUEUE_NAME ?? "component-renders",
+
+  /** Headless project exports run on their own queue and worker (Stage 10). */
+  exportQueueName: process.env.EXPORT_QUEUE_NAME ?? "project-exports",
+
+  /** The editor the export worker drives in headless Chrome. */
+  editorUrl: process.env.EDITOR_URL ?? "http://localhost:5173",
+
+  /** Browser used for headless export; falls back to the usual install locations. */
+  chromePath: process.env.CHROME_PATH ?? null,
+
+  /** Hard ceiling on one export, in ms. Export runs at roughly real time. */
+  exportTimeoutMs: Number(process.env.EXPORT_TIMEOUT_MS ?? 20 * 60_000),
 
   /** Chrome + ffmpeg are heavy; one render at a time keeps the box usable. */
   workerConcurrency: Number(process.env.WORKER_CONCURRENCY ?? 1),

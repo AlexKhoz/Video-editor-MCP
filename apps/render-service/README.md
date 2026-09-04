@@ -35,6 +35,29 @@ answers `409` rather than overwriting a newer save. `POST /media/sweep` (also ru
 `DELETE /projects/:id`) deletes media, files and component metadata that no surviving project
 references.
 
+### Headless project API (Stage 10)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/projects/new` | create an empty valid project server-side |
+| `POST` | `/projects/:id/ops` | apply a list of project-kit operations atomically (honours `expectedUpdatedAt`) |
+| `POST` | `/projects/:id/export` | queue a headless export |
+| `GET` | `/export/:jobId` | export job status, then `file` / `url` / `bytes` |
+| `GET` | `/exports/:file` | the exported mp4 |
+
+Exports need the export worker running as well:
+
+```bash
+npm run export-worker
+```
+
+It drives the editor in headless Chrome via `window.__openreelAutomation`, so the editor
+dev server must be up (`EDITOR_URL`, default <http://localhost:5173>).
+
+**These endpoints have no authentication and let any caller rewrite or export any project.**
+That is acceptable only while everything is localhost-bound — close it before the service is
+reachable by anyone else.
+
 Storage lives in SQLite (`storage/video-editor.sqlite`, via Node's built-in `node:sqlite`) with media
 bytes under `storage/media/`. **There is no authentication** — every project is readable and writable
 by anyone who can reach the service, and concurrent edits are last-save-wins. See NOTES.md.
