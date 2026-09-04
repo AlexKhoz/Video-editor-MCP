@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+.next/
+out/
+.turbo/
+.cache/
+*.log
+.env
+.env.local
+.DS_Store
+storage/rendered/*
+!storage/rendered/.gitkeep
+packages/component-library/output/
