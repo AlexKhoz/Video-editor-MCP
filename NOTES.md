@@ -810,3 +810,92 @@ effect application was undone afterwards, so the saved project still carries exa
 
 **Definition of Done met**: the scenario reproduces locally with no manual file edits between steps,
 everything lives in one git repository, and the root `README.md` documents running it from scratch.
+
+## Stage 7 — alpha fixed in export; the preview-effects fix failed and was reverted
+
+### The earlier diagnosis was wrong in one direction
+
+Stages 2 and 5 concluded "OpenReel drops the alpha channel". That was inferred from the *export*
+only, then generalised. Tested properly — a transparent VP9 clip on Video 1 over gradient footage on
+Video 2, no chroma key:
+
+- **Preview composited the alpha clip correctly all along** (yellow glyphs over the gradient, no black
+  box). Preview's own decode path builds an `HTMLVideoElement` (`Preview.tsx`, `decodeClipFrame`), and
+  `createImageBitmap(video)` keeps the alpha.
+- **Export rendered it as an opaque black rectangle** covering the footage: at 1.0s the centre row had
+  1701 black pixels, 15 gradient, 204 yellow.
+
+So alpha was an **export-path** problem and the effects-reapplication is a **preview-path** problem —
+the mirror image of what Stages 2/5 assumed.
+
+### Fix that landed: one option, in the export decoder
+
+`ExportFrameDecoder` (`packages/core/src/media/mediabunny-engine.ts:113`) built its sink as
+`new CanvasSink(videoTrack, { poolSize: 2 })`. mediabunny's own docs for the option it omits
+(`media-sink.d.ts`, `CanvasSinkOptions`):
+
+> `alpha?: boolean` — "Whether the output canvases should have transparency instead of a black
+> background. Defaults to `false`. Set this to `true` when using this sink to read transparent videos."
+
+Default `false` means `getContext('2d', { alpha: false })`, which bakes black behind every frame.
+mediabunny *does* decode VP9 alpha side data (it has a `u_alphaTexture` WebGL path), so nothing was
+missing upstream — the flag was simply never passed. Adding `alpha: true` is the entire fix.
+
+Verified, same project and timestamps, before -> after:
+
+| sample | before | after |
+|---|---|---|
+| 1.5s black pixels (centre row) | 1701 | **0** |
+| 1.5s gradient pixels | 15 | **1711** |
+| 1.5s yellow glyph pixels | 204 | 209 |
+| 3.5s (alpha clip ended) | gradient, clean | gradient, clean |
+
+**Regression check on the chroma path** (Stage 4/6's mechanism, an opaque clip keyed with the Chroma
+Key effect): export still correct — 0 green, 0 black, gradient visible behind 439 white glyph pixels.
+Preview also still renders normally. `alpha: true` is a no-op for opaque content.
+
+Consequence: **true transparency now works end to end**, so chroma keying is no longer required. The
+panel still renders on `#00ff00` because that path is what Stages 4-6 verified; switching it is a
+one-line change (`CHROMA_BACKGROUND` -> `null` in `ComponentLibraryPanel.tsx`, and drop the
+`background` from the render request), and would remove keying artefacts — but it needs the Stage 5/6
+flows re-verified before being made the default.
+
+### Fix that did NOT work: hydrating the effects bridge (reverted)
+
+Root cause of the preview bug was found and is not in doubt. `applyEffectsToFrame`
+(`components/editor/preview/canvas-renderers.ts:1769`) reads a clip's effects from
+**`effectsBridge.getEffects(clipId)`** — an in-memory `Map` populated only by `applyVideoEffect()`
+when an effect is applied through the UI — while the export reads `clip.effects` off the project
+(`video-engine.ts:788`). Hence: correct in-session, wrong after a reload, export always fine.
+
+The obvious fix — walk the project on load and replay each clip's stored effects into the bridge —
+**made the preview worse**: the canvas rendered nothing at all (pure background, 1882 white pixels in
+the centre row) instead of the unkeyed green. A/B proof, hook in place both times:
+
+| hydration | preview centre row |
+|---|---|
+| `applyVideoEffect` disabled | green 1470, white 416 — renders (the original bug) |
+| `applyVideoEffect` enabled | white 1882 — renders nothing |
+
+Params were not the problem (`getDefaultParams("chromaKey")` supplies key colour, tolerance, edge
+softness and spill). The likely gap: the Effects card path does more than touch the bridge — it
+dispatches `clip/addEffect` *and* the inspector's chroma controls separately drive a `ChromaKeyEngine`
+(`enableChromaKey` / `setKeyColor` / `setTolerance`), so a bridge-only entry leaves the preview's chroma
+pipeline half-configured and it keys everything away. Making this work needs the preview's chroma/GL
+path understood properly, which is more than a safe prototype-scope patch, so the whole attempt was
+reverted: **deferred item #2 stands, with its root cause now pinned to a specific line.**
+
+An earlier `alpha: true` was also tried in `video/decode-worker.ts`, `video/playback-engine.ts` and
+`video/video-engine.ts`. Those sites are not on the export path (the export reaches
+`ExportFrameDecoder` via `decodeFrameWithMediaBunny` -> `getMediaEngine()`), so they were reverted too
+— the change is one line in one file.
+
+### Two debugging traps worth recording
+
+- **`await import('/src/stores/project-store.ts')` from the page console creates a second module
+  instance**, hence a second, empty Zustand store. A probe using it reported "0 clips" for a loaded
+  project and sent this investigation down a blind alley. Read app state through the DOM, or through a
+  module the app itself exported onto `window`.
+- **Autosave recovery is not deterministic across rapid reloads.** Twice a "blank preview" turned out
+  to be an empty project because the Recover dialog had not appeared yet. Always assert the clip count
+  before drawing conclusions from pixels.

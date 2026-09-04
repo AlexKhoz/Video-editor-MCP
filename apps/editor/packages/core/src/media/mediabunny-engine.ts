@@ -110,7 +110,10 @@ export class ExportFrameDecoder {
       return false;
     }
 
-    const sinkOptions: Record<string, unknown> = { poolSize: 2 };
+    // alpha: mediabunny's CanvasSink defaults to an opaque canvas, which bakes a black
+    // background into transparent (VP9 alpha_mode=1) clips instead of letting lower
+    // tracks show through. See CanvasSinkOptions in mediabunny's media-sink.d.ts.
+    const sinkOptions: Record<string, unknown> = { poolSize: 2, alpha: true };
     if (this.width) {
       const aspectRatio = videoTrack.displayHeight / videoTrack.displayWidth;
       sinkOptions.width = this.width;

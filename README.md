@@ -120,14 +120,18 @@ chroma render; omit it for a transparent (VP9 + `yuva420p`) one.
 
 ## Known limitations
 
-Both are documented with evidence in [NOTES.md](NOTES.md):
+Documented with evidence in [NOTES.md](NOTES.md):
 
-- **OpenReel's decoder drops the WebM alpha channel**, which is why components are rendered on chroma
-  green and keyed rather than using true transparency. The transparent render mode still works and is
-  the default in the CLI.
 - **The preview does not apply clip effects after a project reload** (or after a re-render swaps a
   clip's media). The exported video is correct; only the live preview is affected. Re-applying the
-  Chroma Key effect in-session refreshes it.
+  Chroma Key effect in-session refreshes it. The cause is pinned — the preview reads effects from an
+  in-memory bridge that nothing rehydrates (see Stage 7 in NOTES.md) — but the obvious fix made the
+  preview worse and was reverted, so this is still open.
+- **Alpha is fixed** (Stage 7): a one-line `alpha: true` on the export decoder's mediabunny sink means
+  transparent (VP9 `alpha_mode=1`) clips now composite over lower tracks in the export instead of
+  arriving as a black rectangle; the preview always handled them. Components are still rendered on
+  chroma green because that is the path Stages 4-6 verified end to end — switching the panel to true
+  transparency is now a one-line change, pending re-verification.
 
 ## Licences
 
