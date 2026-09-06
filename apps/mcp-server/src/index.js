@@ -29,9 +29,11 @@ track than the footage they sit over.
 
 Available ops:
 
-- add_media { id, name?, metadata }
+- add_media { id, name?, metadata, type? }
     Registers already-uploaded media in the project library. Pass the "mediaId" and
     "metadata" object exactly as returned by upload_media. Required before add_clip.
+    type ("video" | "audio" | "image") is inferred from the metadata and only needs
+    passing to override it - upload_media returns the same value as "mediaType".
 
 - add_track { name? }
     Appends a track. Returns { trackId }.
@@ -40,6 +42,8 @@ Available ops:
     Places media on a track. startTime is where it begins on the timeline (seconds).
     duration defaults to the media's full length; inPoint (default 0) is how far into the
     source the clip starts, so { inPoint: 2, duration: 3 } uses source seconds 2-5.
+    Still images have no inherent length (metadata.duration is 0), so their clips default
+    to 5 seconds - pass duration explicitly to hold one on screen for longer.
     Overlapping an existing clip on the same track is rejected unless allowOverlap: true.
     Returns { clipId }.
 
@@ -202,10 +206,13 @@ server.registerTool(
     title: "Upload a media file",
     description:
       "Uploads a local video, audio or image file to the editor's server-side media store " +
-      "and probes it with ffprobe. Returns the mediaId plus a metadata object (duration, " +
-      "width, height, frameRate, codec, hasAudio …). Pass BOTH of those to the add_media op " +
-      "in apply_project_ops before placing the media on a timeline. Use this for footage on " +
-      "disk and for the file returned by generate_component (pass its localPath).",
+      "and probes it with ffprobe. Returns the mediaId, a metadata object (duration, width, " +
+      "height, frameRate, codec, hasAudio …) and mediaType (\"video\" | \"audio\" | " +
+      "\"image\"). Pass mediaId and metadata to the add_media op in apply_project_ops before " +
+      "placing the media on a timeline. Use this for footage on disk and for the file " +
+      "returned by generate_component (pass its localPath). Still images come back with " +
+      "duration 0 - that means \"no inherent length\", not an error; their clips default to " +
+      "5 seconds unless add_clip is given a duration.",
     inputSchema: {
       filePath: z.string().describe("Absolute path to a file on this machine."),
       mediaId: z
@@ -218,14 +225,18 @@ server.registerTool(
   async ({ filePath, mediaId, mimeType }) => {
     try {
       const record = await service.uploadMedia({ filePath, mediaId, mimeType });
+      const isStill = record.mediaType === "image";
       return ok(
-        `Uploaded ${record.filename} as ${record.id} (${record.size} bytes).`,
+        `Uploaded ${record.filename} as ${record.id} (${record.size} bytes, ${record.mediaType ?? "unknown type"}).`,
         {
           mediaId: record.id,
           name: record.filename,
           size: record.size,
+          mediaType: record.mediaType,
           metadata: record.metadata,
-          hint: "Pass { id: mediaId, name, metadata } to the add_media op.",
+          hint: isStill
+            ? "Still image: pass { id: mediaId, name, metadata } to add_media, then give add_clip an explicit duration (it defaults to 5s)."
+            : "Pass { id: mediaId, name, metadata } to the add_media op.",
         },
       );
     } catch (error) {

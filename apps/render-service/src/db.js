@@ -63,6 +63,13 @@ export function getDb() {
   } catch {
     // already present
   }
+  // The editor's MediaItem.type ("video" | "audio" | "image"). Kept out of the metadata
+  // blob because that blob is handed to the editor verbatim as MediaMetadata.
+  try {
+    db.exec("ALTER TABLE media ADD COLUMN media_type TEXT");
+  } catch {
+    // already present
+  }
 
   return db;
 }
@@ -145,22 +152,27 @@ export function deleteMediaRow(id) {
 
 /* ------------------------------------------------------------------- media */
 
-export function insertMedia({ id, filename, storagePath, mimeType, size, metadata }) {
+export function insertMedia({ id, filename, storagePath, mimeType, size, metadata, mediaType }) {
   const now = Date.now();
   const encoded = metadata ? JSON.stringify(metadata) : null;
   getDb()
     .prepare(
-      `INSERT INTO media (id, filename, storage_path, mime_type, size, created_at, metadata)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO media (id, filename, storage_path, mime_type, size, created_at, metadata, media_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          filename = excluded.filename,
          storage_path = excluded.storage_path,
          mime_type = excluded.mime_type,
          size = excluded.size,
-         metadata = excluded.metadata`,
+         metadata = excluded.metadata,
+         media_type = excluded.media_type`,
     )
-    .run(id, filename, storagePath, mimeType, size, now, encoded);
-  return { id, filename, mimeType, size, createdAt: now, metadata: metadata ?? null };
+    .run(id, filename, storagePath, mimeType, size, now, encoded, mediaType ?? null);
+  return {
+    id, filename, mimeType, size, createdAt: now,
+    metadata: metadata ?? null,
+    mediaType: mediaType ?? null,
+  };
 }
 
 export function getMedia(id) {
@@ -174,12 +186,13 @@ export function getMedia(id) {
     size: row.size,
     createdAt: row.created_at,
     metadata: row.metadata ? JSON.parse(row.metadata) : null,
+    mediaType: row.media_type ?? null,
   };
 }
 
 export function listMedia(limit = 200) {
   return getDb()
-    .prepare("SELECT id, filename, mime_type, size, created_at, metadata FROM media ORDER BY created_at DESC LIMIT ?")
+    .prepare("SELECT id, filename, mime_type, size, created_at, metadata, media_type FROM media ORDER BY created_at DESC LIMIT ?")
     .all(limit)
     .map((row) => ({
       id: row.id,
@@ -188,6 +201,7 @@ export function listMedia(limit = 200) {
       size: row.size,
       createdAt: row.created_at,
       metadata: row.metadata ? JSON.parse(row.metadata) : null,
+      mediaType: row.media_type ?? null,
     }));
 }
 

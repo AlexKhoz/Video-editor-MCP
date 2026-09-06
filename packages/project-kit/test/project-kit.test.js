@@ -179,3 +179,52 @@ test("addTrack appends and names sequentially", () => {
   assert.equal(next.timeline.tracks[1].id, trackId);
   assert.equal(next.timeline.tracks[1].name, "Video 2");
 });
+
+/* ----------------------------------------------- media type inference (Stage 12) */
+
+const STILL = {
+  id: "still-1",
+  name: "background.png",
+  // What probeMedia returns for a PNG: pixels, no length, no tracks.
+  metadata: { duration: 0, width: 1920, height: 1080, frameRate: 0, codec: "", hasVideo: false, hasAudio: false },
+};
+
+test("a still image is typed image, not video", () => {
+  const project = addMediaItem(createProject({ name: "Stills" }), STILL).project;
+  const item = project.mediaLibrary.items.find((entry) => entry.id === "still-1");
+  assert.equal(item.type, "image");
+});
+
+test("an audio-only file is typed audio", () => {
+  const project = addMediaItem(createProject({ name: "Audio" }), {
+    id: "audio-1",
+    name: "voice.m4a",
+    metadata: { duration: 12, width: 0, height: 0, frameRate: 0, codec: "aac", hasVideo: false, hasAudio: true },
+  }).project;
+  assert.equal(project.mediaLibrary.items[0].type, "audio");
+});
+
+test("an explicit type still wins over inference", () => {
+  const project = addMediaItem(createProject({ name: "Override" }), { ...STILL, type: "video" }).project;
+  assert.equal(project.mediaLibrary.items[0].type, "video");
+});
+
+test("metadata with no track flags but a duration stays video", () => {
+  const project = addMediaItem(createProject({ name: "Legacy" }), {
+    id: "legacy-1",
+    name: "clip.mp4",
+    metadata: { duration: 4, width: 1280, height: 720 },
+  }).project;
+  assert.equal(project.mediaLibrary.items[0].type, "video");
+});
+
+test("a still image clip defaults to 5 seconds and accepts an explicit one", () => {
+  const seed = addMediaItem(createProject({ name: "Stills" }), STILL).project;
+  const trackId = seed.timeline.tracks[0].id;
+
+  const defaulted = addClip(seed, { trackId, mediaId: "still-1", startTime: 0 });
+  assert.equal(findClip(defaulted.project, defaulted.clipId).clip.duration, 5);
+
+  const explicit = addClip(seed, { trackId, mediaId: "still-1", startTime: 0, duration: 12 });
+  assert.equal(findClip(explicit.project, explicit.clipId).clip.duration, 12);
+});

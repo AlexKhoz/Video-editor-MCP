@@ -201,7 +201,23 @@ export function addTrack(project, { name, type = "video" } = {}) {
  * Registers media in the library. `metadata` must be supplied by the caller — server-side
  * that means ffprobe, which yields the same fields the browser's importMedia probes.
  */
-export function addMediaItem(project, { id, name, type = "video", metadata, sourceFile }) {
+/**
+ * The editor branches on MediaItem.type all through the render path, so getting it wrong is
+ * not cosmetic: a still image typed as "video" makes the export engine open a video track
+ * that does not exist ("Video load failed"). Infer it from the probe's own flags rather than
+ * assuming video, and let an explicit type win.
+ */
+function inferMediaType(metadata) {
+  if (metadata.hasVideo) return "video";
+  if (metadata.hasAudio) return "audio";
+  // Neither flag set: only call it a still when it has pixels but no length, so metadata
+  // that simply omits the flags still lands on "video" as it did before.
+  if ((metadata.duration ?? 0) > 0) return "video";
+  if ((metadata.width ?? 0) > 0 && (metadata.height ?? 0) > 0) return "image";
+  return "video";
+}
+
+export function addMediaItem(project, { id, name, type, metadata, sourceFile }) {
   if (typeof id !== "string" || !id) fail("INVALID_PARAMS", "media id is required");
   if (findMedia(project, id)) fail("DUPLICATE_MEDIA", `Media ${id} is already in the library`);
   if (!metadata || typeof metadata !== "object") {
@@ -211,7 +227,7 @@ export function addMediaItem(project, { id, name, type = "video", metadata, sour
   next.mediaLibrary.items.push({
     id,
     name: name ?? id,
-    type,
+    type: type ?? inferMediaType(metadata),
     fileHandle: null,
     blob: null,
     metadata: {

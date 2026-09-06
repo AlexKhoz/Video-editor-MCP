@@ -188,9 +188,12 @@ export async function registerStorageRoutes(app) {
 
     // Probe server-side so headless callers (ops API, MCP server) get the same metadata
     // the browser's importMedia would have produced — they need it for the add_media op.
+    // mediaType matters as much as the metadata: a still registered as "video" makes the
+    // export engine try to open a video track that isn't there.
     let metadata = null;
+    let mediaType = null;
     try {
-      metadata = await probeMedia(storagePath);
+      ({ metadata, mediaType } = await probeMedia(storagePath));
     } catch (error) {
       app.log.warn(`ffprobe failed for ${filename}: ${error.message}`);
     }
@@ -202,6 +205,7 @@ export async function registerStorageRoutes(app) {
       mimeType: String(request.headers["x-mime-type"] ?? "application/octet-stream"),
       size,
       metadata,
+      mediaType,
     });
 
     return reply.code(201).send({ ...record, url: `/media/${id}` });
