@@ -70,6 +70,13 @@ Available ops:
 
 - remove_effect { clipId, type? | effectId? }
 
+- set_audio_fade { clipId, fadeInSeconds?, fadeOutSeconds? }
+    Fades the clip's audio up from silence at its start and/or down to silence at its end,
+    over that many seconds. Linear, applied to the clip's own gain, and included in the
+    exported mix - no need to pre-process the file with ffmpeg before uploading. Pass one
+    end to change only that end; 0 on both removes the fade. Fades that together exceed the
+    clip's duration are rejected. Use set_clip_transform's volume for a flat level change.
+
 - set_clip_transform { clipId, transform?, opacity?, volume? }
     transform accepts { position:{x,y}, scale:{x,y}, rotation, anchor:{x,y}, fitMode }.
     fitMode is "contain" | "cover" | "stretch". opacity and volume are 0-1.

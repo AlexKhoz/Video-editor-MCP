@@ -60,7 +60,7 @@ test("apply_project_ops documents the whole operation vocabulary", () => {
   const tool = tools.find((item) => item.name === "apply_project_ops");
   for (const op of [
     "add_media", "add_track", "add_clip", "trim_clip", "move_clip", "split_clip",
-    "remove_clip", "set_effect", "remove_effect", "set_clip_transform", "add_text_clip",
+    "remove_clip", "set_effect", "remove_effect", "set_clip_transform", "set_audio_fade", "add_text_clip",
     "add_transition", "rename_project",
   ]) {
     assert.match(tool.description, new RegExp(op), `description should document ${op}`);

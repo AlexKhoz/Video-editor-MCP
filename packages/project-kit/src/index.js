@@ -198,10 +198,6 @@ export function addTrack(project, { name, type = "video" } = {}) {
 }
 
 /**
- * Registers media in the library. `metadata` must be supplied by the caller — server-side
- * that means ffprobe, which yields the same fields the browser's importMedia probes.
- */
-/**
  * The editor branches on MediaItem.type all through the render path, so getting it wrong is
  * not cosmetic: a still image typed as "video" makes the export engine open a video track
  * that does not exist ("Video load failed"). Infer it from the probe's own flags rather than
@@ -217,6 +213,10 @@ function inferMediaType(metadata) {
   return "video";
 }
 
+/**
+ * Registers media in the library. `metadata` must be supplied by the caller — server-side
+ * that means ffprobe, which yields the same fields the browser's importMedia probes.
+ */
 export function addMediaItem(project, { id, name, type, metadata, sourceFile }) {
   if (typeof id !== "string" || !id) fail("INVALID_PARAMS", "media id is required");
   if (findMedia(project, id)) fail("DUPLICATE_MEDIA", `Media ${id} is already in the library`);
@@ -410,6 +410,47 @@ export function setClipTransform(project, { clipId, transform = {}, volume, opac
 }
 
 /**
+ * Audio fade in/out, in seconds from each end of the clip.
+ *
+ * Writes the engine's own `clip.fade` field, which the audio engine turns into a linear gain
+ * envelope on the clip's gain node (see clip-fade-envelope.ts) and which survives into the
+ * export mix. Transitions can impose their own fades; the engine takes whichever is longer.
+ *
+ * Fades longer than the clip, or overlapping each other, are rejected rather than silently
+ * clamped - an agent that asks for a 5s fade on a 2s clip has made a mistake worth hearing
+ * about. Setting both to 0 removes the fade entirely.
+ */
+export function setAudioFade(project, { clipId, fadeInSeconds, fadeOutSeconds }) {
+  requireClip(project, clipId);
+  if (fadeInSeconds === undefined && fadeOutSeconds === undefined) {
+    fail("INVALID_PARAMS", "set_audio_fade needs fadeInSeconds and/or fadeOutSeconds");
+  }
+
+  const next = clone(project);
+  const clip = findClip(next, clipId).clip;
+  const current = clip.fade ?? { fadeIn: 0, fadeOut: 0 };
+
+  const fadeIn = fadeInSeconds === undefined
+    ? current.fadeIn
+    : requireFiniteNumber(fadeInSeconds, "fadeInSeconds", { min: 0 });
+  const fadeOut = fadeOutSeconds === undefined
+    ? current.fadeOut
+    : requireFiniteNumber(fadeOutSeconds, "fadeOutSeconds", { min: 0 });
+
+  if (fadeIn + fadeOut > clip.duration + 1e-6) {
+    fail(
+      "INVALID_PARAMS",
+      `fades (${fadeIn}s + ${fadeOut}s) exceed the clip's ${clip.duration}s`,
+    );
+  }
+
+  if (fadeIn === 0 && fadeOut === 0) delete clip.fade;
+  else clip.fade = { fadeIn, fadeOut };
+
+  return { project: finish(next), clipId, fade: clip.fade ?? null };
+}
+
+/**
  * Text clips go in the TOP-LEVEL `textClips[]` array (verified in Stage 10 check #2): the
  * editor loads them into its title engine, and they render in the export.
  */
@@ -492,6 +533,7 @@ export const OPERATIONS = {
   set_effect: setEffect,
   remove_effect: removeEffect,
   set_clip_transform: setClipTransform,
+  set_audio_fade: setAudioFade,
   add_text_clip: addTextClip,
   add_transition: addTransition,
   rename_project: renameProject,

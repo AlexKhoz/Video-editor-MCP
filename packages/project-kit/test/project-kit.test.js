@@ -13,6 +13,7 @@ import {
   findClip,
   ProjectKitError,
   removeClip,
+  setAudioFade,
   setEffect,
   splitClip,
   trimClip,
@@ -227,4 +228,48 @@ test("a still image clip defaults to 5 seconds and accepts an explicit one", () 
 
   const explicit = addClip(seed, { trackId, mediaId: "still-1", startTime: 0, duration: 12 });
   assert.equal(findClip(explicit.project, explicit.clipId).clip.duration, 12);
+});
+
+/* --------------------------------------------------------- audio fades (Stage 12) */
+
+function seededWithClip() {
+  const { project, trackId } = seeded();
+  const added = addClip(project, { trackId, mediaId: "media-1", startTime: 0, duration: 6 });
+  return { project: added.project, clipId: added.clipId, trackId };
+}
+
+test("set_audio_fade writes the engine's clip.fade field in seconds", () => {
+  const { project, clipId } = seededWithClip();
+  const faded = setAudioFade(project, { clipId, fadeInSeconds: 1, fadeOutSeconds: 1.5 }).project;
+  assert.deepEqual(findClip(faded, clipId).clip.fade, { fadeIn: 1, fadeOut: 1.5 });
+});
+
+test("set_audio_fade updates one end without clearing the other", () => {
+  const { project, clipId } = seededWithClip();
+  const both = setAudioFade(project, { clipId, fadeInSeconds: 2, fadeOutSeconds: 2 }).project;
+  const changed = setAudioFade(both, { clipId, fadeOutSeconds: 0.5 }).project;
+  assert.deepEqual(findClip(changed, clipId).clip.fade, { fadeIn: 2, fadeOut: 0.5 });
+});
+
+test("zero on both ends removes the fade entirely", () => {
+  const { project, clipId } = seededWithClip();
+  const faded = setAudioFade(project, { clipId, fadeInSeconds: 1, fadeOutSeconds: 1 }).project;
+  const cleared = setAudioFade(faded, { clipId, fadeInSeconds: 0, fadeOutSeconds: 0 }).project;
+  assert.equal(findClip(cleared, clipId).clip.fade, undefined);
+});
+
+test("fades longer than the clip are rejected, not silently clamped", () => {
+  const { project, clipId } = seededWithClip();
+  expectCode(() => setAudioFade(project, { clipId, fadeInSeconds: 4, fadeOutSeconds: 4 }), "INVALID_PARAMS");
+  expectCode(() => setAudioFade(project, { clipId, fadeInSeconds: -1 }), "INVALID_PARAMS");
+  expectCode(() => setAudioFade(project, { clipId }), "INVALID_PARAMS");
+  expectCode(() => setAudioFade(project, { clipId: "nope", fadeInSeconds: 1 }), "CLIP_NOT_FOUND");
+});
+
+test("set_audio_fade is reachable through applyOps", () => {
+  const { project, clipId } = seededWithClip();
+  const { project: applied } = applyOps(project, [
+    { op: "set_audio_fade", clipId, fadeInSeconds: 0.75, fadeOutSeconds: 0.25 },
+  ]);
+  assert.deepEqual(findClip(applied, clipId).clip.fade, { fadeIn: 0.75, fadeOut: 0.25 });
 });
