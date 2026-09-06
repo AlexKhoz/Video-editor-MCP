@@ -53,6 +53,20 @@ Component Library panel
 
 ## Run it from scratch
 
+### The lazy way
+
+```powershell
+.\start-all.ps1
+```
+
+Starts Docker Desktop if it is not running, brings up Redis, opens one Windows Terminal window
+with four titled tabs (Render API, Render Worker, Export Worker, Editor), then waits until
+`/health` reports `{"status":"ok","redis":"up"}` and prints a summary. `start-all.bat` is a
+double-click wrapper. Tear it down with `.\stop-all.ps1`, which stops the four node processes,
+closes their tabs and runs `docker compose down`.
+
+The rest of this section is what those scripts do, for when you want the processes yourself.
+
 ### One-time install
 
 ```bash

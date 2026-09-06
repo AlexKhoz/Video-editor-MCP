@@ -18,3 +18,4 @@ storage/*.sqlite
 storage/*.sqlite-shm
 storage/*.sqlite-wal
 storage/exports/
+.dev-stack.json
