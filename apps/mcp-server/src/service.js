@@ -72,6 +72,7 @@ export const service = {
   renderStatus: (jobId) => request("GET", `/render/${encodeURIComponent(jobId)}`),
   startExport: (id, body) => request("POST", `/projects/${encodeURIComponent(id)}/export`, { body }),
   exportStatus: (jobId) => request("GET", `/export/${encodeURIComponent(jobId)}`),
+  startFrame: (id, body) => request("POST", `/projects/${encodeURIComponent(id)}/frame`, { body }),
 
   /** Uploads a local file's bytes. Returns { id, filename, size, url }. */
   async uploadMedia({ filePath, mediaId, mimeType }) {

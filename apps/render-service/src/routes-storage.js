@@ -1,6 +1,7 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { randomUUID } from "node:crypto";
 
@@ -22,6 +23,30 @@ import {
 } from "./db.js";
 
 const SAFE_EXT = /^\.[A-Za-z0-9]{1,8}$/;
+
+/**
+ * Fails the stream once more than `limit` bytes have gone through.
+ *
+ * Fastify's own bodyLimit does not apply here: the octet-stream parser below hands the raw
+ * request stream to the route instead of buffering it, which is what keeps a 2 GB upload out
+ * of memory - and also what removes the ceiling. Without this a runaway upload just fills the
+ * disk, and the client learns nothing.
+ */
+function sizeLimiter(limit) {
+  let seen = 0;
+  return new Transform({
+    transform(chunk, _encoding, done) {
+      seen += chunk.length;
+      if (seen > limit) {
+        const error = new Error(`Upload exceeds the ${limit} byte limit`);
+        error.code = "UPLOAD_TOO_LARGE";
+        done(error);
+        return;
+      }
+      done(null, chunk);
+    },
+  });
+}
 
 /**
  * Parses a single-range `Range: bytes=…` header.
@@ -180,7 +205,27 @@ export async function registerStorageRoutes(app) {
     const storageName = `${id}${SAFE_EXT.test(ext) ? ext : ""}`;
     const storagePath = path.join(config.mediaDir, storageName);
 
-    await pipeline(stream, createWriteStream(storagePath));
+    // Reject on the declared length when there is one, so a doomed upload does not have to
+    // travel first; the limiter is what catches a chunked body with no content-length.
+    const declared = Number(request.headers["content-length"] ?? 0);
+    if (declared > config.uploadLimitBytes) {
+      return reply.code(413).send({
+        error: "Upload too large",
+        limitBytes: config.uploadLimitBytes,
+        declaredBytes: declared,
+      });
+    }
+
+    try {
+      await pipeline(stream, sizeLimiter(config.uploadLimitBytes), createWriteStream(storagePath));
+    } catch (error) {
+      await fs.rm(storagePath, { force: true });
+      if (error?.code === "UPLOAD_TOO_LARGE") {
+        return reply.code(413).send({ error: "Upload too large", limitBytes: config.uploadLimitBytes });
+      }
+      throw error;
+    }
+
     const { size } = await fs.stat(storagePath);
     if (size === 0) {
       await fs.rm(storagePath, { force: true });

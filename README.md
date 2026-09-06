@@ -208,7 +208,9 @@ Documented with evidence in [NOTES.md](NOTES.md):
   is reachable from another machine**.
 - **Last-save-wins by default.** The editor and the MCP server send the `updatedAt` they last saw and
   get a 409 on a conflict, but a client that omits the guard still overwrites.
-- Uploads are whole-file and not resumable; exports run one headless Chrome at a time with no
+- Uploads are whole-file and not resumable: an interrupted upload starts over. The ceiling is
+  `UPLOAD_LIMIT_BYTES` (2 GB); over it the server answers **413** and deletes the partial file,
+  rather than filling the disk quietly. Exports run one headless Chrome at a time, with no
   cancellation.
 - Disk is swept on service start and on `POST /storage/sweep` (send `{"dryRun":true}` to see
   what would go). Media orphaned by editing, unreferenced component renders older than

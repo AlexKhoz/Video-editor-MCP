@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "video-editor": {
+      "command": "node",
+      "args": ["E:/Replika/Tools/video-editor/apps/mcp-server/src/index.js"],
+      "env": { "RENDER_SERVICE_URL": "http://127.0.0.1:3001" }
+    }
+  }
+}

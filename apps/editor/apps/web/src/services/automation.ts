@@ -4,6 +4,7 @@ import type { Project, VideoExportSettings } from "@openreel/core";
 import { refreshRegistry } from "./component-library-clips";
 import { saveMediaBlob } from "./media-storage";
 import { fetchServerMedia, loadServerProject } from "./server-storage";
+import { useEngineStore } from "../stores/engine-store";
 import { useProjectStore } from "../stores/project-store";
 
 /**
@@ -200,18 +201,76 @@ function getExportState() {
   };
 }
 
-/** Hands the bytes over as base64 and drops the local reference. */
-function takeExportBase64(): string | null {
-  if (!state.bytes) return null;
-  const view = state.bytes;
+function encodeBase64(view: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < view.length; i += 0x8000) {
     binary += String.fromCharCode.apply(null, Array.from(view.subarray(i, i + 0x8000)));
   }
-  const base64 = btoa(binary);
+  return btoa(binary);
+}
+
+/** Hands the bytes over as base64 and drops the local reference. */
+function takeExportBase64(): string | null {
+  if (!state.bytes) return null;
+  const base64 = encodeBase64(state.bytes);
   state.bytes = null;
   state.status = "idle";
   return base64;
+}
+
+/**
+ * One composited frame as a PNG, without encoding a video.
+ *
+ * `VideoEngine.renderFrame` is what the preview canvas itself uses, so this is the same
+ * compositing path — tracks in render order, transforms, effects, text and graphics — just
+ * without the encoder or the audio mix. Seconds instead of the minutes a full export takes,
+ * which is the whole point: an agent can look at what it built.
+ *
+ * The project comes from `getFullProject()`, not the raw store, because text/shape/SVG
+ * clips live in the engines and only that merge brings them back.
+ */
+async function renderPreviewFrame(
+  time: number,
+  options: { width?: number; height?: number } = {},
+): Promise<
+  | { ok: true; base64: string; width: number; height: number; time: number }
+  | { ok: false; error: string }
+> {
+  try {
+    // The engine store initialises lazily, and in a headless tab nothing has triggered it:
+    // the preview canvas is what normally does, and no one has looked at it. `initialize()`
+    // also returns immediately when an init is already in flight, so waiting on the promise
+    // is not enough — wait for the store to actually settle.
+    const engineStore = useEngineStore.getState();
+    if (!engineStore.initialized) {
+      void engineStore.initialize().catch(() => {});
+      const deadline = Date.now() + 30_000;
+      while (!useEngineStore.getState().initialized && Date.now() < deadline) {
+        const { initError } = useEngineStore.getState();
+        if (initError) return { ok: false, error: `Engine init failed: ${initError}` };
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+
+    const engine = useEngineStore.getState().videoEngine;
+    if (!engine) return { ok: false, error: "VideoEngine did not initialise within 30s" };
+
+    const project: Project = useProjectStore.getState().getFullProject();
+    const at = Math.max(0, Math.min(time, project.timeline.duration));
+    const frame = await engine.renderFrame(project, at, options.width, options.height);
+    if (!frame) return { ok: false, error: `renderFrame produced nothing at ${at}s` };
+
+    const canvas = new OffscreenCanvas(frame.width, frame.height);
+    const context = canvas.getContext("2d");
+    if (!context) return { ok: false, error: "Could not get a 2d context" };
+    context.drawImage(frame.image, 0, 0);
+
+    const blob = await canvas.convertToBlob({ type: "image/png" });
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    return { ok: true, base64: encodeBase64(bytes), width: frame.width, height: frame.height, time: at };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export interface OpenReelAutomation {
@@ -221,6 +280,7 @@ export interface OpenReelAutomation {
   startExport: typeof startExport;
   getExportState: typeof getExportState;
   takeExportBase64: typeof takeExportBase64;
+  renderPreviewFrame: typeof renderPreviewFrame;
 }
 
 declare global {
@@ -239,5 +299,6 @@ export function installAutomationHook(): void {
     startExport,
     getExportState,
     takeExportBase64,
+    renderPreviewFrame,
   };
 }

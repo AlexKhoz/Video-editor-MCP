@@ -482,6 +482,61 @@ server.registerTool(
 );
 
 server.registerTool(
+  "render_preview_frame",
+  {
+    title: "Look at one frame",
+    description:
+      "Renders a single frame of the project as a PNG and waits for it (a few seconds - far " +
+      "cheaper than export_project, which encodes the whole timeline). Use it to CHECK YOUR " +
+      "WORK: after laying out clips, render a frame at a time where an overlay or effect " +
+      "should be visible and confirm it is. It runs the editor's own compositing path, so " +
+      "what you see is what an export would produce at that instant - tracks in order, " +
+      "transforms, effects, text and graphics - minus audio. Saves to downloadTo when given.",
+    inputSchema: {
+      projectId: z.string().describe("Project id to render from."),
+      time: z
+        .number()
+        .min(0)
+        .describe("Timeline position in seconds. Clamped to the timeline's duration."),
+      width: z.number().int().positive().optional().describe("Optional output width; defaults to the project's."),
+      height: z.number().int().positive().optional().describe("Optional output height."),
+      downloadTo: z.string().optional().describe("Optional local directory to save the PNG into."),
+    },
+  },
+  async ({ projectId, time, width, height, downloadTo }) => {
+    try {
+      const queued = await service.startFrame(projectId, { time, width, height });
+      const job = await service.waitForJob(() => service.exportStatus(queued.jobId), {
+        timeoutMs: 5 * 60_000,
+        intervalMs: 1000,
+        label: `Preview frame of project ${projectId} at ${time}s`,
+      });
+
+      let saved = null;
+      if (downloadTo) {
+        saved = await service.downloadToFile(job.url, path.join(downloadTo, job.file));
+      }
+
+      return ok(
+        `Rendered a frame at ${job.time ?? time}s (${job.width}x${job.height}, ${job.bytes} bytes).`,
+        {
+          file: job.file,
+          time: job.time ?? time,
+          width: job.width,
+          height: job.height,
+          bytes: job.bytes,
+          serverPath: job.filePath,
+          serviceUrl: `${SERVICE_URL}${job.url}`,
+          localPath: saved?.path ?? null,
+        },
+      );
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+server.registerTool(
   "service_health",
   {
     title: "Check the editor services",

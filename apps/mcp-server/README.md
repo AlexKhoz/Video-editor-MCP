@@ -92,14 +92,20 @@ protocol channel, and one stray `console.log` there corrupts the session.
 | `load_project` | Current state: tracks, clips (ids, times, effects), text clips, media library, timeline duration. `includeRaw` for the full JSON. |
 | `apply_project_ops` | The main editing tool. Applies a list of ops **atomically**; its description carries the whole op vocabulary. |
 | `export_project` | Renders the project to MP4 in a headless browser. **Blocks** until done; optionally downloads it. |
+| `render_preview_frame` | One composited PNG at a given time, in a couple of seconds. The cheap way to check what you built without encoding the whole timeline. |
 | `service_health` | render-service reachable, Redis up. Distinguishes a stopped service from a bad request. |
 
-Two deliberate design choices:
+Three deliberate design choices:
 
 **Long jobs are polled inside the tool.** `generate_component` and `export_project` queue
 the job and then poll until it finishes, returning a single answer. A model that has to
 poll a job itself burns turns and tends to give up early or declare success on a
 `waiting` status.
+
+**A frame is much cheaper than a video.** `render_preview_frame` runs the editor's own
+compositing path (`VideoEngine.renderFrame`) with no encoder and no audio mix, so it returns
+in ~2s against ~10s+ for an export of even a short timeline. Sampled frames from a preview
+and from an export of the same project agree pixel-for-pixel bar h264 quantisation.
 
 **Descriptions carry the domain knowledge, not the code.** The things that cost us real
 debugging time in earlier stages are stated where the model reads them:

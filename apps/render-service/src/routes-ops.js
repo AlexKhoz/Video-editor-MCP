@@ -95,6 +95,35 @@ export async function registerOpsRoutes(app) {
     return reply.code(202).send({ jobId: job.id, status: "pending", projectId: request.params.id });
   });
 
+  /**
+   * `POST /projects/:id/frame` — one composited PNG instead of a whole video.
+   *
+   * Same queue and same worker as export (one headless Chrome at a time is still the rule),
+   * but the job skips the encoder and the audio mix, so it comes back in seconds. Poll it
+   * through the same GET /export/:jobId.
+   */
+  app.post("/projects/:id/frame", async (request, reply) => {
+    const record = getProject(request.params.id);
+    if (!record) return reply.code(404).send({ error: "Unknown project" });
+
+    const { time = 0, width, height } = request.body ?? {};
+    const at = Number(time);
+    if (!Number.isFinite(at) || at < 0) {
+      return reply.code(400).send({ error: "time must be a non-negative number of seconds" });
+    }
+
+    const job = await exportQueue.add("frame", {
+      kind: "frame",
+      projectId: request.params.id,
+      projectName: record.name,
+      time: at,
+      width: width === undefined ? undefined : Number(width),
+      height: height === undefined ? undefined : Number(height),
+    });
+
+    return reply.code(202).send({ jobId: job.id, status: "pending", projectId: request.params.id, time: at });
+  });
+
   app.get("/export/:jobId", async (request, reply) => {
     const job = await exportQueue.getJob(request.params.jobId);
     if (!job) return reply.code(404).send({ error: "Unknown export job" });
@@ -107,6 +136,8 @@ export async function registerOpsRoutes(app) {
       progress: job.progress ?? 0,
     };
 
+    if (job.data.kind === "frame") body.kind = "frame";
+
     if (status === "done") {
       const result = job.returnvalue ?? {};
       body.file = result.fileName;
@@ -114,15 +145,25 @@ export async function registerOpsRoutes(app) {
       body.url = `/exports/${result.fileName}`;
       body.bytes = result.bytes;
       body.durationSeconds = result.durationSeconds;
+      if (result.width) body.width = result.width;
+      if (result.height) body.height = result.height;
+      if (result.time !== undefined) body.time = result.time;
     }
     if (status === "failed") body.error = job.failedReason ?? "Export failed";
 
     return body;
   });
 
+  const EXPORT_CONTENT_TYPES = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".png": "image/png",
+  };
+
   app.get("/exports/:fileName", async (request, reply) => {
     const { fileName } = request.params;
-    if (!/^[A-Za-z0-9._-]+\.(mp4|webm|mov)$/.test(fileName)) {
+    if (!/^[A-Za-z0-9._-]+\.(mp4|webm|mov|png)$/.test(fileName)) {
       return reply.code(400).send({ error: "Invalid file name" });
     }
     const filePath = path.join(config.exportDir, fileName);
@@ -132,7 +173,7 @@ export async function registerOpsRoutes(app) {
     } catch {
       return reply.code(404).send({ error: "Not found" });
     }
-    reply.header("content-type", "video/mp4");
+    reply.header("content-type", EXPORT_CONTENT_TYPES[path.extname(fileName).toLowerCase()] ?? "application/octet-stream");
     reply.header("content-length", stat.size);
     return reply.send(createReadStream(filePath));
   });

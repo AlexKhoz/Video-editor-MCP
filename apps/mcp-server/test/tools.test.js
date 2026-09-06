@@ -24,6 +24,7 @@ const EXPECTED_TOOLS = [
   "load_project",
   "apply_project_ops",
   "export_project",
+  "render_preview_frame",
   "service_health",
 ];
 
@@ -94,7 +95,7 @@ test("tools that create or mutate declare their required parameters", () => {
 });
 
 test("long-running tools promise to block rather than ask the caller to poll", () => {
-  for (const name of ["generate_component", "export_project"]) {
+  for (const name of ["generate_component", "export_project", "render_preview_frame"]) {
     const tool = tools.find((item) => item.name === name);
     assert.match(tool.description, /blocks until|waits for/i, `${name} should say it waits`);
   }

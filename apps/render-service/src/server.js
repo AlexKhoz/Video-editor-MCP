@@ -9,7 +9,7 @@ import { getComponent, listComponents, resolveDuration, validateProps } from "./
 import { config } from "./config.js";
 import { createQueue, toApiStatus } from "./queue.js";
 import { registerOpsRoutes } from "./routes-ops.js";
-import { registerStorageRoutes } from "./routes-storage.js";
+import { parseByteRange, registerStorageRoutes } from "./routes-storage.js";
 import { sweepAll } from "./sweep.js";
 
 const app = Fastify({
@@ -163,9 +163,30 @@ app.get("/files/:fileName", async (request, reply) => {
     return reply.code(404).send({ error: "Not found" });
   }
 
+  // Same range handling as GET /media/:id, and for the same reason: without it a <video>
+  // seeking in a rendered component re-downloads the whole file. Parsed before the media
+  // content-type is set, because Fastify refuses to serialise the 416 body once the type
+  // says video/*.
+  const range = parseByteRange(request.headers.range, stat.size);
+
+  if (range === "invalid") {
+    reply.header("content-range", `bytes */${stat.size}`);
+    reply.header("accept-ranges", "bytes");
+    return reply.code(416).send({ error: "Requested range not satisfiable" });
+  }
+
   reply.header("content-type", "video/webm");
-  reply.header("content-length", stat.size);
+  reply.header("accept-ranges", "bytes");
   reply.header("cache-control", "public, max-age=31536000, immutable");
+
+  if (range) {
+    reply.code(206);
+    reply.header("content-range", `bytes ${range.start}-${range.end}/${stat.size}`);
+    reply.header("content-length", range.end - range.start + 1);
+    return reply.send(createReadStream(filePath, { start: range.start, end: range.end }));
+  }
+
+  reply.header("content-length", stat.size);
   return reply.send(createReadStream(filePath));
 });
 
