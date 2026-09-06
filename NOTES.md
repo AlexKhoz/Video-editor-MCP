@@ -1466,5 +1466,168 @@ its magnitude.
   read or overwrite any project. Must be closed before render-service is reachable beyond
   this machine.
 - `upload_media` reads local paths with the privileges of whoever runs the server.
-- No `render_preview_frame`; the model cannot see a frame without a full export.
+- ~~No `render_preview_frame`~~ — added in Stage 12; the model can now see one frame in ~2s.
 - Tool edits bypass undo/redo, and an editor tab with the project open needs a reload.
+
+## Stage 12 — bug-fixing pass
+
+Seven independent items, each committed separately so any one can be reverted alone.
+
+### 1. Still images were registered as video, and export died (4203e7f)
+
+Reproduced exactly: a PNG through `upload_media` then `add_clip` killed the export in the
+preparing phase with `{"status":"failed","error":"Video load failed"}`.
+
+The duration was a red herring. ffprobe reports a PNG as a one-frame *video* stream, so
+`hasVideo: true`, and project-kit's `add_media` defaulted every item to `type: "video"`. The
+editor branches on `MediaItem.type` all through the render path, so the export engine went
+looking for a video track that does not exist.
+
+`duration: 0` turned out to be **correct** and was kept: the browser's own
+`extractImageMetadata` returns 0, and both the store and project-kit already default an image
+clip to 5s. Zero there means "no inherent length", not "probe failed".
+
+- `probeMedia` now returns `{ metadata, mediaType }` and classifies stills. Animated gif/webp
+  stay video via a frame-count check.
+- `mediaType` lives in a new `media.media_type` column (tolerant ALTER, like `metadata`),
+  *not* in the metadata blob — that blob is handed to the editor verbatim as `MediaMetadata`.
+- project-kit infers the type from the metadata flags instead of assuming video, which also
+  fixes audio-only files landing as video. An explicit `type` still wins.
+
+Verified: PNG background + text overlay exports as 90 frames / 3.000s, the image's blue in
+every sampled frame, text only in its window. 4 probe tests, 5 project-kit tests.
+
+### 2. set_audio_fade (6048f12)
+
+The engine already honoured `clip.fade = { fadeIn, fadeOut }` — `audio-engine.ts:367` turns it
+into a linear gain envelope (`clip-fade-envelope.ts`) that survives into the export mix. No op
+wrote it, so an agent had to pre-process with ffmpeg before uploading. The new op writes
+exactly that field; fades exceeding the clip are rejected rather than clamped.
+
+Same 5s clip exported twice, only the fade differing:
+
+| segment | baseline | fadeIn/Out 1.5s |
+|---|---|---|
+| 0.0-0.4 | -24.2 dB | **-40.4 dB** |
+| 0.4-0.8 | -24.1 dB | **-31.9 dB** |
+| 2.2-2.8 | -24.1 dB | **-24.1 dB** |
+| 4.2-4.6 | -24.1 dB | **-31.9 dB** |
+| 4.6-5.0 | -24.1 dB | **-40.4 dB** |
+
+Symmetric, and the hold region matches baseline exactly.
+
+### 3. Float noise on adjacent boundaries (006f1f7)
+
+Not in the editor's action-validator, as assumed — in project-kit's `assertNoOverlap`.
+`0.1 + 0.2` is `0.30000000000000004`, so a clip placed at exactly `0.3` was rejected as
+overlapping by 5.5e-17 seconds, and callers were nudging boundaries by microseconds:
+
+```
+clip A end = 0.30000000000000004
+B at 0.3      -> CLIP_OVERLAP
+B at 0.300002 -> OK   (the workaround)
+```
+
+The test already used strict `<`, which permits exact adjacency; what it lacked was tolerance
+for the arithmetic that produced the numbers. Both sides now compare against
+`BOUNDARY_EPSILON = 1e-4` — 12 orders of magnitude above the noise, well under a 60fps frame
+(16.7ms) or a 48kHz sample (0.02ms), so it cannot mask a real overlap. Shared by add, trim and
+move. The other tolerances here (1ms on source length, minimum durations) are deliberate
+limits, not float noise, and are untouched.
+
+Verified with clips at 0 / 1.1 / 1.3 / 2.0 (where 1.1+0.2 is 1.3000000000000003), accepted with
+no offsets; luminance across the three seams 143.6 / 144.2 / 145.5 with no black frame.
+
+### 4. Sweeping rendered files and old exports (f903d97)
+
+Stage 9's rule ("orphaned when no project mentions the id") does not fit the other two
+directories, so each got its own:
+
+- **rendered/** — a finished render may not have been collected yet, so a file goes only when
+  nothing references it (a `component_metadata.renderedFileId`, or a mention anywhere in a
+  project's JSON, since clips carry `renderedFileId` for re-render) **and** it is past a grace
+  period.
+- **exports/** — nothing ever references an export. Pure retention: newest N plus anything
+  inside the age limit.
+
+`POST /storage/sweep` runs all three with per-directory options; `{"dryRun":true}` reports
+without deleting. The same sweep runs at startup, after `listen` and unawaited.
+
+Verified: 4 tests against throwaway dirs (env-overridden paths, so the real tree cannot be
+touched); live startup pass took rendered from 20 to 12 files; a dry run listed 6 exports /
+39.6 MB with all 8 still on disk; a real sweep removed exactly the two oldest.
+
+`db.js` gained `closeDb()` — Windows will not unlink an open SQLite file, so tests could not
+clean up.
+
+### 5. Four small deferred items (2385b2d)
+
+**Byte ranges on `GET /files/:name.webm`**, reusing `/media/:id`'s parser: 206 + content-range,
+suffix ranges, 416 with `bytes */size`. Partial content byte-identical to the same slice of the
+whole file.
+
+**An actual upload ceiling.** Fastify's `bodyLimit` never applied to `POST /media`: the
+octet-stream parser hands the route the raw stream instead of buffering it — which is what
+keeps a 2 GB upload out of memory, and also what removed the ceiling. A declared content-length
+over the limit is now refused before the bytes travel; a chunked body is cut off mid-stream by
+a size limiter; both answer 413 and delete the partial. Resumable uploads are still not
+implemented and that is now stated in the README.
+
+**`render_preview_frame`** — one composited PNG at a given time. `VideoEngine.renderFrame` is
+what the preview canvas itself uses, so it is the export's compositing path minus encoder and
+audio mix: ~2s against ~10s+. Runs as a `"frame"` job on the existing export queue, so still
+one Chrome at a time. Preview vs export of the same project at the same timestamps:
+
+| time | preview PNG | exported video |
+|---|---|---|
+| 0.3s | white 0, blue 960 | white 0, blue 960 |
+| 1.5s | white 68, blue 886 | white 67, blue 886 |
+
+Identical bar h264 quantisation against a lossless PNG.
+
+Gotcha worth keeping: **the engine store initialises lazily and nothing triggers it in a
+headless tab** (the preview canvas is what normally does), and `initialize()` returns
+immediately when an init is already in flight — so waiting on that promise proves nothing. The
+hook waits for the store to settle instead.
+
+### 6. logo-reveal-v2 shards (f826f65)
+
+The shards landed at radius 170, which is the ring's own radius, and the ring strokes 16px of
+the same colour across 162-178 — so the twelve shards the build-up spends most of its runtime
+flying in were buried underneath it. They now land at ring outer edge + half a shard + an 8px
+gap (193), derived from the ring geometry, and hold at 0.8 opacity instead of 0.35.
+
+Pink pixels by radius in the held frame at 1.6s:
+
+| band | before | after |
+|---|---|---|
+| core r0-45 | 1562 | 1562 |
+| ring r160-178 | 4661 | 4440 |
+| **outside r184-200** | **0** | **3769** |
+
+Two measurement traps: bands guessed rather than measured gave byte-identical counts for two
+visibly different frames; and extracting a PNG from a VP9-alpha WebM **without
+`-c:v libvpx-vp9`** yields a fully opaque frame, so alpha-based counting measures nothing.
+Colour-by-radius with the explicit decoder is what showed the difference.
+
+### 7. Preview effects after reload — investigated, plan pending approval
+
+**Stage 7's diagnosis was aimed at the wrong thing.** The editor already has a canonical
+hydrator: `syncProjectEffectsBridge` (`project-store.ts:769`) walks every clip and calls
+`effectsBridge.deserializeEffects` — the same path undo/redo uses, and its own comment says it
+is "what makes undo/redo (and project load) restore the graded look". **`loadProject()` already
+calls it** (`project-store.ts:1770`).
+
+What Stage 7 tried instead was replaying effects through `applyVideoEffect()`, which *also*
+drives the ChromaKeyEngine — hence the blanked frame. "The Effects card does more than the
+bridge" was true but irrelevant: the supported hydration path never goes near that code.
+
+Two concrete gaps found instead:
+
+- Both sync helpers **return early and silently when `effectsBridge.isInitialized()` is
+  false**, and `getEffectsBridge()` is synchronous with fire-and-forget background init
+  (`effects-bridge.ts:1299`). On a reload the project can be restored before that init
+  resolves, in which case the sync no-ops and **nothing ever re-runs it**. That fits every
+  symptom: right in-session, wrong after reload, export always fine.
+- `replaceMediaAsset` calls `set({ project })` with **no** `syncClipEffectsBridge` — the
+  media-swap half of the bug.
