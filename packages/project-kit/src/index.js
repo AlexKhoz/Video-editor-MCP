@@ -114,13 +114,29 @@ function requireFiniteNumber(value, name, { min = 0 } = {}) {
   return number;
 }
 
+/**
+ * Boundary tolerance, in seconds.
+ *
+ * Clip ends are computed as `startTime + duration`, and binary floating point does not do
+ * that exactly: a clip at 0.1s lasting 0.2s ends at 0.30000000000000004, so a clip placed
+ * at exactly 0.3s used to be rejected as overlapping by 5.5e-17 seconds. Callers were
+ * left nudging boundaries by a couple of microseconds to get edge-to-edge clips accepted.
+ *
+ * 0.1ms is far above that noise and far below anything audible or visible - a frame at
+ * 60fps is 16.7ms, a sample at 48kHz is 0.02ms - so treating two boundaries this close as
+ * touching cannot hide a real overlap.
+ */
+export const BOUNDARY_EPSILON = 1e-4;
+
 /** Overlap check on one track, ignoring a clip being moved/resized. */
 function assertNoOverlap(track, startTime, duration, ignoreClipId) {
   const end = startTime + duration;
   for (const clip of track.clips) {
     if (clip.id === ignoreClipId) continue;
     const clipEnd = clip.startTime + clip.duration;
-    if (startTime < clipEnd && clip.startTime < end) {
+    // Strict "<" already allows exact adjacency; the epsilon is what makes adjacency
+    // survive the arithmetic that produced these numbers.
+    if (startTime < clipEnd - BOUNDARY_EPSILON && clip.startTime < end - BOUNDARY_EPSILON) {
       fail(
         "CLIP_OVERLAP",
         `Clip would overlap "${clip.id}" (${clip.startTime.toFixed(2)}–${clipEnd.toFixed(2)}s) on track ${track.name}`,

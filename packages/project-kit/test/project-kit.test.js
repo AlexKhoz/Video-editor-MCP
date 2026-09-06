@@ -8,10 +8,13 @@ import {
   addTrack,
   addTransition,
   applyOps,
+  BOUNDARY_EPSILON,
   computeTimelineDuration,
   createProject,
   findClip,
+  findTrack,
   ProjectKitError,
+  moveClip,
   removeClip,
   setAudioFade,
   setEffect,
@@ -272,4 +275,66 @@ test("set_audio_fade is reachable through applyOps", () => {
     { op: "set_audio_fade", clipId, fadeInSeconds: 0.75, fadeOutSeconds: 0.25 },
   ]);
   assert.deepEqual(findClip(applied, clipId).clip.fade, { fadeIn: 0.75, fadeOut: 0.25 });
+});
+
+/* ------------------------------------------ float-safe clip boundaries (Stage 12) */
+
+function seededLongMedia() {
+  const project = createProject({ name: "Adjacent" });
+  const trackId = project.timeline.tracks[0].id;
+  const withMedia = addMediaItem(project, {
+    id: "long-1",
+    name: "long.mp4",
+    metadata: { duration: 60, width: 1920, height: 1080, frameRate: 30, hasVideo: true, hasAudio: true },
+  }).project;
+  return { project: withMedia, trackId };
+}
+
+test("clips placed exactly edge-to-edge are accepted despite float error", () => {
+  const { project, trackId } = seededLongMedia();
+  // 0.1 + 0.2 === 0.30000000000000004, which used to read as an overlap.
+  assert.notEqual(0.1 + 0.2, 0.3, "precondition: this arithmetic is inexact");
+  const first = addClip(project, { trackId, mediaId: "long-1", startTime: 0.1, duration: 0.2 });
+  const second = addClip(first.project, { trackId, mediaId: "long-1", startTime: 0.3, duration: 1 });
+  assert.equal(findClip(second.project, second.clipId).clip.startTime, 0.3);
+});
+
+test("a chain of back-to-back clips needs no manual offsets", () => {
+  const { project, trackId } = seededLongMedia();
+  let current = project;
+  let time = 0;
+  for (let i = 0; i < 12; i++) {
+    current = addClip(current, { trackId, mediaId: "long-1", startTime: time, duration: 0.1 }).project;
+    time += 0.1;
+  }
+  assert.equal(findTrack(current, trackId).clips.length, 12);
+});
+
+test("a real overlap is still rejected", () => {
+  const { project, trackId } = seededLongMedia();
+  const first = addClip(project, { trackId, mediaId: "long-1", startTime: 0, duration: 2 });
+  // Half a second in - nowhere near the epsilon.
+  expectCode(
+    () => addClip(first.project, { trackId, mediaId: "long-1", startTime: 1.5, duration: 1 }),
+    "CLIP_OVERLAP",
+  );
+  // And an overlap ten times the epsilon still counts.
+  expectCode(
+    () => addClip(first.project, { trackId, mediaId: "long-1", startTime: 2 - BOUNDARY_EPSILON * 10, duration: 1 }),
+    "CLIP_OVERLAP",
+  );
+});
+
+test("trim and move honour the same tolerance", () => {
+  const { project, trackId } = seededLongMedia();
+  const first = addClip(project, { trackId, mediaId: "long-1", startTime: 0, duration: 0.3 });
+  const second = addClip(first.project, { trackId, mediaId: "long-1", startTime: 1, duration: 0.5 });
+
+  // Move the second clip so it starts exactly where the first ends.
+  const moved = moveClip(second.project, { clipId: second.clipId, startTime: 0.1 + 0.2 });
+  assert.ok(moved.project);
+
+  // Grow the first clip so it ends exactly where the second now starts.
+  const trimmed = trimClip(moved.project, { clipId: first.clipId, duration: 0.30000000000000004 });
+  assert.ok(trimmed.project);
 });
