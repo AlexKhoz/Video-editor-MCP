@@ -46,63 +46,87 @@ Component Library panel
 |---|---|---|
 | Node.js 18+ | everything | built and tested on 22.14 |
 | pnpm | the editor workspace | the fork pins `pnpm@11.7.0` via `packageManager` |
-| npm | render-service + component library | both are standalone npm projects |
+| npm | render-service, component library, MCP server | standalone npm projects, outside the pnpm workspace |
 | Docker + Compose | Redis for the job queue | Docker Desktop must actually be running |
 | ffmpeg on PATH | encodes the rendered frames | tested with 8.1.1 |
 | Chrome / Chromium / Edge | headless renderer | already-installed browser; override with `CHROME_PATH` |
 
 ## Run it from scratch
 
-Four terminals (or run the first three in the background).
-
-**1. Redis**
-
-```bash
-docker compose -f infra/docker-compose.yml up -d
-```
-
-**2. Component library dependencies** (once)
+### One-time install
 
 ```bash
 cd packages/component-library && npm install
 ```
 
-**3. Render service**
+```bash
+cd apps/render-service && npm install
+```
 
 ```bash
-cd apps/render-service && npm install && npm start
+cd apps/mcp-server && npm install
 ```
+
+```bash
+cd apps/editor && pnpm install --filter "@openreel/web..."
+```
+
+### Cold start
+
+One detached container plus **four long-running processes**, each in its own terminal, in this
+order. All paths are relative to the repo root. (These blocks use `&&`; PowerShell 5.1 does not
+support it — run the `cd` and the command as two lines there, or use Git Bash.)
+
+**1. Redis** — the job queue. Detached, so this terminal is free afterwards.
+
+```bash
+docker compose -f infra/docker-compose.yml up -d
+```
+
+Docker Desktop must actually be running. Check with `docker ps`: `video-editor-redis` on
+`127.0.0.1:6379`.
+
+**2. render-service API** — HTTP on <http://127.0.0.1:3001>.
+
+```bash
+cd apps/render-service && npm start
+```
+
+Verify: `curl http://127.0.0.1:3001/health` reports `"status":"ok"` and `"redis":"up"`.
+
+**3. Component render worker** — consumes `/render` jobs.
 
 ```bash
 cd apps/render-service && npm run worker
 ```
 
-The API listens on <http://127.0.0.1:3001>; `GET /health` should report `"redis":"up"`. Server and
-worker are separate processes because a render occupies a headless Chrome and an ffmpeg for tens of
-seconds.
+Separate from the API because a render occupies a headless Chrome and an ffmpeg for tens of
+seconds. Without it, renders queue forever and `/health` still says ok.
 
-**4. The editor**
-
-```bash
-cd apps/editor && pnpm install --filter "@openreel/web..." && pnpm --filter @openreel/web dev
-```
-
-Open <http://localhost:5173>, pick a format, and the editor loads. The **Component Library** tab is in
-the left rail; **Projects** is the server-side project list.
-
-**5. Headless exports** (only needed for the ops/MCP export path)
+**4. Export worker** — consumes `/projects/:id/export` jobs (the ops API and MCP export path).
 
 ```bash
 cd apps/render-service && npm run export-worker
 ```
 
-Drives the real editor in a headless Chrome via `window.__openreelAutomation`, so it needs the editor
-dev server from step 4 to be running.
+It drives the real editor in a headless Chrome, so the dev server below must be up **before an
+export job runs** — not before this worker starts. Override its target with `EDITOR_URL`.
+
+**5. Editor dev server** — <http://localhost:5173>.
+
+```bash
+cd apps/editor && pnpm --filter @openreel/web dev
+```
+
+Open it, pick a format, and the editor loads. The **Component Library** tab is in the left rail;
+**Projects** is the server-side project list.
+
+Only doing manual editing in the browser? Steps 1, 2, 3 and 5 are enough — step 4 is only for
+headless exports.
 
 ## Driving it from Claude (MCP)
 
 ```bash
-cd apps/mcp-server && npm install
 claude mcp add video-editor --scope user -- node E:/Replika/Tools/video-editor/apps/mcp-server/src/index.js
 ```
 
