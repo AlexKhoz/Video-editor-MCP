@@ -16,6 +16,24 @@ const MIN_HOLD = 0.3;
 /** Number of shards that fly in to assemble the mark. */
 const SHARDS = 12;
 
+const RING_DIAMETER = 340;
+const RING_STROKE = 16;
+const SHARD_LENGTH = 90;
+const SHARD_THICKNESS = 14;
+
+/**
+ * Where the shards come to rest.
+ *
+ * They used to land at the ring's own radius (170), which put them under a 16px stroke of
+ * the same colour - so everything the build-up animated vanished the moment the ring
+ * appeared. Landing just outside the stroke keeps them part of the mark instead of a
+ * disposable intro: ring outer edge + half a shard's thickness + a small gap.
+ */
+const LANDING_RADIUS = RING_DIAMETER / 2 + RING_STROKE / 2 + SHARD_THICKNESS / 2 + 8;
+
+/** Held opacity for the landed shards - dimmer than the ring, but still clearly there. */
+const SHARD_HELD_OPACITY = 0.8;
+
 /**
  * A geometric build-up, deliberately different from `logo-reveal`'s badge wipe: shards
  * spiral in from outside the frame and converge into a ring, which then locks in with a
@@ -40,10 +58,10 @@ export default makeScene2D(function* (view) {
     <>
       <Circle
         ref={ring}
-        width={340}
-        height={340}
+        width={RING_DIAMETER}
+        height={RING_DIAMETER}
         stroke={primaryColor}
-        lineWidth={16}
+        lineWidth={RING_STROKE}
         scale={0}
         opacity={0}
       />
@@ -55,9 +73,9 @@ export default makeScene2D(function* (view) {
           <Rect
             ref={ref}
             key={`shard-${index}`}
-            width={90}
-            height={14}
-            radius={7}
+            width={SHARD_LENGTH}
+            height={SHARD_THICKNESS}
+            radius={SHARD_THICKNESS / 2}
             fill={primaryColor}
             x={Math.cos(angle) * radius}
             y={Math.sin(angle) * radius}
@@ -73,7 +91,7 @@ export default makeScene2D(function* (view) {
   yield* all(
     ...shards.map((ref, index) => {
       const angle = (index / SHARDS) * Math.PI * 2;
-      const landing = 170;
+      const landing = LANDING_RADIUS;
       const delay = (index / SHARDS) * 0.28;
       return (function* () {
         yield* waitFor(delay);
@@ -91,7 +109,7 @@ export default makeScene2D(function* (view) {
   yield* all(
     ring().opacity(1, 0.2),
     ring().scale(1, 0.35, easeOutBack),
-    ...shards.map((ref) => ref().opacity(0.35, 0.35, easeOutCubic)),
+    ...shards.map((ref) => ref().opacity(SHARD_HELD_OPACITY, 0.35, easeOutCubic)),
   );
   yield* core().scale(1, 0.3, easeOutBack);
 
