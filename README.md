@@ -208,8 +208,13 @@ Documented with evidence in [NOTES.md](NOTES.md):
   is reachable from another machine**.
 - **Last-save-wins by default.** The editor and the MCP server send the `updatedAt` they last saw and
   get a 409 on a conflict, but a client that omits the guard still overwrites.
-- Uploads are whole-file and not resumable; `storage/rendered/` and `storage/exports/` are never
-  pruned; exports run one headless Chrome at a time with no cancellation.
+- Uploads are whole-file and not resumable; exports run one headless Chrome at a time with no
+  cancellation.
+- Disk is swept on service start and on `POST /storage/sweep` (send `{"dryRun":true}` to see
+  what would go). Media orphaned by editing, unreferenced component renders older than
+  `RENDERED_GRACE_MINUTES` (60), and exports beyond the newest `EXPORT_KEEP_COUNT` (10) and
+  older than `EXPORT_MAX_AGE_HOURS` (168) are removed. `SWEEP_ON_START=0` disables the
+  startup pass.
 - Edits made through the ops API or MCP bypass the editor's undo/redo, and an open editor tab needs a
   reload to see them.
 

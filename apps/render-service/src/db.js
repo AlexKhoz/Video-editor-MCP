@@ -141,6 +141,18 @@ export function findOrphanedMedia() {
   return mediaIds.filter((id) => !projects.some((data) => data.includes(id)));
 }
 
+/** Closes the handle, so a test (or a shutdown) can release the file. Reopens on demand. */
+export function closeDb() {
+  if (!db) return;
+  db.close();
+  db = null;
+}
+
+/** Raw project JSON blobs, for the substring reference test the sweeps share. */
+export function listProjectData() {
+  return getDb().prepare("SELECT data FROM projects").all().map((row) => row.data);
+}
+
 /** Removes a media row and its component metadata. The file itself is the caller's job. */
 export function deleteMediaRow(id) {
   const db = getDb();

@@ -65,6 +65,19 @@ export const config = {
   /** Hard ceiling on a single render, in ms. */
   renderTimeoutMs: Number(process.env.RENDER_TIMEOUT_MS ?? 10 * 60_000),
 
+  /**
+   * Disk housekeeping (Stage 12). Nothing here deletes anything a project still references;
+   * these are the "how long do we keep the rest" knobs. Set SWEEP_ON_START=0 to skip the
+   * startup pass and sweep only via POST /storage/sweep.
+   */
+  sweepOnStart: process.env.SWEEP_ON_START !== "0",
+  /** Grace period before an unreferenced component render can be swept. */
+  renderedGraceMinutes: Number(process.env.RENDERED_GRACE_MINUTES ?? 60),
+  /** Newest exports always kept, regardless of age. */
+  exportKeepCount: Number(process.env.EXPORT_KEEP_COUNT ?? 10),
+  /** Exports younger than this are kept even beyond the count. */
+  exportMaxAgeHours: Number(process.env.EXPORT_MAX_AGE_HOURS ?? 24 * 7),
+
   /** Defaults for the rendered frame; overridable per request. */
   defaultFps: Number(process.env.RENDER_FPS ?? 30),
   defaultWidth: Number(process.env.RENDER_WIDTH ?? 1920),

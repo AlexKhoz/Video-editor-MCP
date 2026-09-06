@@ -10,6 +10,7 @@ import { config } from "./config.js";
 import { createQueue, toApiStatus } from "./queue.js";
 import { registerOpsRoutes } from "./routes-ops.js";
 import { registerStorageRoutes } from "./routes-storage.js";
+import { sweepAll } from "./sweep.js";
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL ?? "info" },
@@ -176,6 +177,25 @@ async function main() {
   app.log.info(
     `render-service on http://${config.host}:${config.port} — storage ${config.storageDir}`,
   );
+
+  // Housekeeping runs after listen and is never awaited: a slow disk should delay nobody's
+  // first request, and a sweep failure is not a reason for the service to be down.
+  if (config.sweepOnStart) {
+    sweepAll({
+      rendered: { minAgeMinutes: config.renderedGraceMinutes },
+      exports: { keep: config.exportKeepCount, maxAgeHours: config.exportMaxAgeHours },
+    })
+      .then((report) => {
+        const freed = Math.round(report.totalBytesFreed / 1024 / 1024);
+        if (report.orphanedMediaRemoved.length || report.renderedRemoved.length || report.exportsRemoved.length) {
+          app.log.info(
+            `startup sweep: ${report.orphanedMediaRemoved.length} media, ` +
+              `${report.renderedRemoved.length} rendered, ${report.exportsRemoved.length} exports, ${freed} MB freed`,
+          );
+        }
+      })
+      .catch((error) => app.log.warn(`startup sweep failed: ${error.message}`));
+  }
 }
 
 main().catch((error) => {

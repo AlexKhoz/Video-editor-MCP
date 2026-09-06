@@ -6,10 +6,9 @@ import { randomUUID } from "node:crypto";
 
 import { config } from "./config.js";
 import { probeMedia } from "./probe.js";
+import { sweepAll, sweepOrphanedMedia } from "./sweep.js";
 import {
-  deleteMediaRow,
   deleteProject,
-  findOrphanedMedia,
   getComponentMetadata,
   getMedia,
   getProject,
@@ -56,22 +55,6 @@ export function parseByteRange(header, size) {
   if (!Number.isFinite(start) || !Number.isFinite(end)) return "invalid";
   if (start > end || start >= size) return "invalid";
   return { start, end };
-}
-
-/**
- * Deletes media (row, file and component metadata) that no surviving project references.
- * Returns the ids removed.
- */
-async function sweepOrphanedMedia() {
-  const removed = [];
-  for (const id of findOrphanedMedia()) {
-    const storagePath = deleteMediaRow(id);
-    if (storagePath) {
-      await fs.rm(storagePath, { force: true });
-    }
-    removed.push(id);
-  }
-  return removed;
 }
 
 /**
@@ -150,6 +133,24 @@ export async function registerStorageRoutes(app) {
 
   /** Explicit sweep, for when media was orphaned by editing rather than deleting. */
   app.post("/media/sweep", async () => ({ orphanedMediaRemoved: await sweepOrphanedMedia() }));
+
+  /**
+   * `POST /storage/sweep` - housekeeping across all three directories.
+   *
+   * Body (all optional):
+   *   dryRun                     report what would go, delete nothing
+   *   rendered.minAgeMinutes     grace period for uncollected renders (default 60)
+   *   exports.keep               newest exports to always keep (default 10)
+   *   exports.maxAgeHours        keep anything younger than this (default 168)
+   */
+  app.post("/storage/sweep", async (request) => {
+    const body = request.body ?? {};
+    return sweepAll({
+      dryRun: Boolean(body.dryRun),
+      rendered: body.rendered ?? {},
+      exports: body.exports ?? {},
+    });
+  });
 
   /* ----------------------------------------------------------------- media */
 
