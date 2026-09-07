@@ -18,6 +18,7 @@ export default defineConfig({
         "./src/projects/logo-reveal-v2.ts",
         "./src/projects/stat-counter.ts",
         "./src/projects/turbulent-background.ts",
+        "./src/projects/orbit-headline.ts",
       ],
       output: "./output",
     }),

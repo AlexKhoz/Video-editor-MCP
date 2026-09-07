@@ -25,6 +25,7 @@ import colorTransition from "./projects/color-transition?project";
 import logoReveal from "./projects/logo-reveal?project";
 import logoRevealV2 from "./projects/logo-reveal-v2?project";
 import lowerThird from "./projects/lower-third?project";
+import orbitHeadline from "./projects/orbit-headline?project";
 import statCounter from "./projects/stat-counter?project";
 import turbulentBackground from "./projects/turbulent-background?project";
 
@@ -36,6 +37,7 @@ const PROJECTS: Record<string, Project> = {
   "logo-reveal-v2": logoRevealV2,
   "stat-counter": statCounter,
   "turbulent-background": turbulentBackground,
+  "orbit-headline": orbitHeadline,
 };
 
 interface RenderReport {

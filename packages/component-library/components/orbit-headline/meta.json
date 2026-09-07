@@ -1,0 +1,74 @@
+{
+  "id": "orbit-headline",
+  "name": "Orbit Headline",
+  "description": "Parametric reconstruction of an After Effects headline: words scale in one after another and drift along shallow arcs under a slow group zoom, staying upright throughout. Curves are ported from the original Bodymovin export, so any duration keeps the source's timing character.",
+  "project": "src/projects/orbit-headline.ts",
+  "durationParam": "durationInSeconds",
+  "params": [
+    {
+      "key": "text",
+      "label": "Headline",
+      "type": "text",
+      "default": "You talk | I'll listen",
+      "description": "The headline. Split into words automatically; a \"|\" starts a new phrase that replaces the previous one, so \"You talk | I'll listen\" plays as two phrases and \"Ship it\" as one."
+    },
+    {
+      "key": "fontFamily",
+      "label": "Font",
+      "type": "text",
+      "default": "Archivo Black",
+      "description": "Any font installed where the render runs. The original used the commercial Widescreen-Bold, which is not available here; Archivo Black is the closest wide, heavy grotesque, and it falls back to Arial Black then sans-serif."
+    },
+    { "key": "textColor", "label": "Text colour", "type": "color", "default": "#00004d" },
+    {
+      "key": "durationInSeconds",
+      "label": "Duration (s)",
+      "type": "number",
+      "default": 5.6,
+      "min": 1.5,
+      "max": 20,
+      "step": 0.1,
+      "description": "The source is 5.6s (168 frames at 30fps). Every curve is normalised, so other durations stretch or compress proportionally rather than clipping."
+    },
+    {
+      "key": "zoomAmount",
+      "label": "Group zoom",
+      "type": "number",
+      "default": 1,
+      "min": 0,
+      "max": 2,
+      "step": 0.05,
+      "description": "Scales the source's 0.97x-to-1.61x push. 1 reproduces it, 0 holds the block still, 2 doubles the travel."
+    },
+    {
+      "key": "driftAmount",
+      "label": "Orbit drift",
+      "type": "number",
+      "default": 1,
+      "min": 0,
+      "max": 2,
+      "step": 0.05,
+      "description": "Scales the arc each word travels (the source sweeps -29deg to +40deg about the centre). 0 keeps the words on their layout positions."
+    },
+    {
+      "key": "settleAmount",
+      "label": "Rotation settle (deg)",
+      "type": "number",
+      "default": 0,
+      "min": 0,
+      "max": 30,
+      "step": 0.5,
+      "description": "Off by default, because the source keeps every word perfectly upright - its per-frame rotation keys are counter-rotation of the rig, not a wobble. Non-zero adds a decaying rotational settle on entry as an artistic option."
+    },
+    {
+      "key": "staggerSeconds",
+      "label": "Word stagger (s)",
+      "type": "number",
+      "default": 0.12,
+      "min": 0,
+      "max": 1,
+      "step": 0.02,
+      "description": "Delay between word entrances within a phrase (the source uses 3.5 frames, about 0.12s). Capped automatically so short durations still leave every word time to arrive."
+    }
+  ]
+}

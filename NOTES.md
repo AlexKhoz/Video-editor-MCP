@@ -1918,3 +1918,127 @@ rather than quietly dropped; happy to add it if the comparison matters for its o
 - The service still type-checks params only (`media` is "must be a string"). Cross-field rules
   like "custom requires image" live in the scene, so they fail at render time rather than being
   rejected by `POST /render`. A `requiredWhen` rule in `meta.json` would move it earlier.
+
+## Stage 14 — orbit-headline (parametric Bodymovin reconstruction)
+
+An eighth component, rebuilt from `Simple headline.json` (After Effects via Bodymovin, 168
+frames at 30fps, 1920x1080). Parametric, not a frame replay: every curve is a normalised
+keyframe table ported from the export, so any duration keeps the source's timing character.
+
+### What the file actually does, which is not what the layer names suggest
+
+Two findings changed the spec before any code was written.
+
+**It is two phrases in sequence, not one headline.** Four text layers: `You` (frames 0-84) and
+`talk` (3.5-84), then `I'll` (84-168) and `listen` (84-168).
+
+**The words never rotate.** Composing each word's full parent chain gives a world rotation of
+~0 for the entire phrase:
+
+```
+t/dur:      0%     5%    10%    20%    30%    50%    70%    90%
+'You':    0.00   0.02   0.01   0.00   0.00  -0.00  -0.00  -0.02
+'listen':-0.00   0.02   0.01   0.00   0.00  -0.00  -0.00  -0.02
+```
+
+The 84 baked per-frame rotation keys on each text layer (15 -> 9.077 -> 6.044 -> ... ->
+-59.815) are *exactly the counter-rotation of the parent nulls* — AE keeping each word upright
+while the rig swings it. The giveaway is that all four words share one curve offset by a
+constant: `You` = `listen` + 14, to the last decimal. So the "damped settle converging to zero"
+those numbers look like is an artefact of the rig, and fitting a spring to it would have been
+fitting nothing. What is actually visible is **positional**: each word travels a shallow arc
+(net 130-264px) because its parent null rotates -29deg -> 0 -> +40deg about the group centre,
+under a two-null group zoom of 0.969 -> 1.612 and a further 0 -> 27.833deg group rotation that
+likewise only moves words rather than turning them.
+
+Also inert: the `Plague of null layers.` / `© 2022 Battle Axe Inc` pseudo-effects on the nulls
+are watermark data from the plugin that built the rig.
+
+### Exact bezier port rather than approximated easing
+
+Every property in a Lottie export is a keyframe track with bezier handles, and porting that
+evaluation costs about thirty lines (`src/lib/curves.ts`). Fitting named easings instead was
+measurably worse — for the per-word scale-in, handles `cubic-bezier(0.001, 0, 0.156, 1)`:
+
+| candidate | RMS | max error |
+|---|---|---|
+| **exact bezier (ported)** | **0.0000** | **0.0000** |
+| easeOutCubic | 0.0272 | 0.0591 |
+| easeOutQuart | 0.0588 | 0.0976 |
+| easeOutExpo | 0.1284 | 0.2232 |
+| easeOutBack | 0.1631 | 0.2557 |
+| easeOutElastic | 0.3565 | 0.9775 |
+
+The orbit sweep is worse still for named easings: two segments, `(0.001,0,0,1)` then
+`(1,0,1,1)`, whose closest named fit is *linear* at RMS 0.174. Bisection rather than Newton
+in the solver, because handles like `(1, 0, 1, 1)` have vanishing derivatives at the ends.
+
+### Font
+
+`Widescreen-Bold` is Battle Axe commercial and absent from the render environment. Probing
+with width comparison rather than `document.fonts.check()` — which returns `true` for every
+family, including nonsense — showed Widescreen falling back to monospace metrics while
+`Archivo Black` (665px for the probe string), `Arial Black` (683) and `Montserrat` (676) are
+real. Default is `Archivo Black`, the closest wide heavy grotesque, with an
+`"Arial Black", sans-serif` fallback. Condensed faces (Anton 490, Oswald 499, Impact 518) were
+the wrong direction.
+
+### Design decisions
+
+- **Phrases in one text param.** The vocabulary has no array type, so `|` marks a phrase
+  break: `"You talk | I'll listen"` is the original, `"Ship it"` is one phrase.
+- **`settleAmount` defaults to 0**, so the default output matches the source's upright words.
+  Non-zero adds a decaying rotational wobble for anyone who wants the "orbit" reading.
+- **Per-phrase fit-to-frame**, measured from the laid-out text. One global scale is set by the
+  longest phrase, which leaves a one-word phrase rendering tiny beside a three-word one.
+- Stagger is capped at a quarter of the phrase divided by the word count, so a short duration
+  cannot push the last word's entry past the point where it still has time to arrive.
+
+### Verification
+
+**Curve-fit accuracy** — the component's tables against the JSON's baked values, at matched
+proportional timestamps (source frame `ip + (op - ip) * p`), two words each:
+
+| quantity | max abs error |
+|---|---|
+| orbit sweep, `You` and `listen` | **0.000e+00 deg** |
+| per-word scale-in, `You` and `listen` | 1.11e-16 x |
+| group zoom (both nulls multiplied) | 2.32e-13 x |
+| group rotation | 0.000e+00 deg |
+| word world rotation vs component's 0 | 1.75e-02 deg |
+
+The last row is the source's own bake residual (its composed chain wobbles by up to 0.017deg),
+not the component's error — the component is exactly 0.
+
+**Generalisation** — different word counts, phrase counts and durations, frame-sampled:
+
+| render | frames | behaviour |
+|---|---|---|
+| source, 5.6s, 2x2 words | 170 (168+2) | phrase swap at t=0.5: ink 48005 -> 36504, centre jumps 964 -> 1025 |
+| `Ship it fast`, 3.0s, 1 phrase | 92 (90+2) | three staggered entries, ink 11621 -> 110189 |
+| `Design \| Build \| Ship it now`, 9.0s, 3 phrases | 272 (270+2) | swaps at t=0.35 and t=0.70, ink dropping 38263 -> 22869 and 47972 -> 69059 |
+| four long words, 4.0s | 122 | fit engages: max bbox 1552x723 inside 1920x1080, never touching an edge |
+
+Frame counts are exactly `duration * 30 + trailing`, so the timing is proportional rather
+than clipped.
+
+**Two defects caught by that sampling and fixed:**
+
+- The final frame rendered **empty**. The visibility window used `progress < phraseEnd`, and
+  the last phrase's end is exactly 1, so everything vanished on the last frame. The final
+  phrase now runs inclusive of 1.
+- Single-word phrases rendered much smaller than multi-word ones, because the fit was computed
+  once over every word in the headline. Now per phrase.
+
+`lower-third` still renders 89 frames at 1920x1080, unchanged; the service catalogue lists all
+eight components.
+
+### Deferred
+
+- Word layout is a fixed diagonal step (0.82 x fontSize across, 0.85 down) derived from the
+  source's hand-placed positions. Longer phrases therefore shrink to fit rather than rewrapping;
+  a wrap-to-lines mode would suit long headlines better.
+- The source's last two frames dip (linear null 125% -> 120%, eased 130% at 167.5). The tables
+  keep it, so the reconstruction inherits a one-frame scale dip at the very end.
+- The 3.5-frame entry offset of `talk` puts its orbit mid-key at 52.2% of its own span rather
+  than 50%; the component uses 50% for every word. Difference is under half a degree.
