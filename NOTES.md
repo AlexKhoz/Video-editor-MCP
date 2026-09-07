@@ -1610,7 +1610,7 @@ visibly different frames; and extracting a PNG from a VP9-alpha WebM **without
 `-c:v libvpx-vp9`** yields a fully opaque frame, so alpha-based counting measures nothing.
 Colour-by-radius with the explicit decoder is what showed the difference.
 
-### 7. Preview effects after reload — fixed for the reload path (73df62b)
+### 7. Preview effects after reload — fixed (73df62b); swap path proved not to need one
 
 **Stage 7's diagnosis was aimed at the wrong thing.** The editor already has a canonical
 hydrator: `syncProjectEffectsBridge` (`project-store.ts:769`) walks every clip and calls
@@ -1680,8 +1680,7 @@ code first showed why that would be another no-op: `handleRegenerate` calls
 The Stage 7 observation was most likely the reload bug seen after a re-render, or a stale
 decode cache, which is a different mechanism.
 
-Not added, pending the empirical swap test, which needs Redis and the render worker for a real
-re-render.
+Not added. The swap test below then confirmed it was unnecessary rather than untested.
 
 #### Gotcha: sample only after the composite settles
 
@@ -1689,3 +1688,58 @@ A first post-fix reading showed `green 0` **and** `plate 0` — which looks like
 over-keying failure. It was neither: the preview composites asynchronously and the component
 layer had not been drawn yet. A whole-frame scan found the plate and text present a moment
 later. Assert that the expected feature *is* there, not merely that the artefact is gone.
+
+#### Swap test: fix 2 was correctly declined (it would have been a no-op)
+
+Run through the real UI path, not a simulation: a green `lower-third` clip carrying genuine
+Component Library metadata (`source: "component-library"`, componentId, props, background
+`#00ff00`) plus a `chromaKey` effect, selected in the timeline, title changed to
+"SWAPPED TITLE", **Re-render clip** pressed — so `handleRegenerate` ran for real, including
+`replaceMediaAsset`, `saveMediaBlob`, `uploadMedia` and `updateClipMetadata`.
+
+Preview at the same playhead (00:02:12), before and after the swap:
+
+| | band row (green / gradient / plate) | centre row |
+|---|---|---|
+| before swap | 0 / 521 / 439 | 0 / 960 |
+| after swap | 0 / 521 / 439 | 0 / 960 |
+
+Identical — the clip stays keyed across a media swap, with **no** `syncClipEffectsBridge`
+added to `replaceMediaAsset`. Which is what reading the code predicted: the swap rewrites the
+media item only, so the bridge entry (keyed by clip id) is never invalidated.
+
+Identical numbers are also how a test that did nothing would look, so the swap was proved
+independently. Server-side after the re-render: `component-metadata` for that mediaId now
+reads `props.title: "SWAPPED TITLE"`, `renderedFileId: "20.webm"`; the media row is
+`lower-third-SWAPPED TITLE.webm` at 50,925 bytes, exactly `20.webm`'s size. And the preview
+matches the new render's glyphs, not the old one's:
+
+| | white glyph pixels in the band |
+|---|---|
+| old render (`green-lt.webm`, "CHROMA GATE") | 2597 |
+| new render (`20.webm`, "SWAPPED TITLE") | 2709 |
+| **preview after swap** | **2733** |
+
+2733 sits with the new render (the ~1% difference is chroma edge softness eroding glyph
+antialiasing over the gradient), and nowhere near the old render's 2597.
+
+**Verdict: fix 2 is unneeded, not merely untested.** The Stage 7 note that the swap also broke
+the preview was the reload bug observed after a re-render.
+
+#### Export regression, chroma path (Stage 4/6 equivalent)
+
+`19.mp4` — h264 1920x1080, **150 frames, 5.000s**:
+
+```
+t=0.5  band[green=0  white=0    plate=0     grad=76800]  centre[green=0 grad=19200]
+t=2.0  band[green=8  white=2700 plate=28920 grad=45172]  centre[green=0 grad=19200]
+t=3.0  band[green=12 white=2702 plate=28926 grad=45160]  centre[green=0 grad=19200]
+t=4.5  band[green=0  white=0    plate=0     grad=76800]  centre[green=0 grad=19200]
+```
+
+Gradient everywhere the component is absent, the component's plate and glyphs where it is,
+no black rectangle, and the centre row never sees green. The 8-12 stray green pixels out of
+76,800 sampled band pixels (0.01%) are keying edge antialiasing — Stage 7's run reported 0
+with the Effects card's default params, where this used tolerance 0.35 / edgeSoftness 0.1 set
+through the ops API. Different params, same conclusion. White glyphs at 2700 also confirm the
+export used the swapped media.
