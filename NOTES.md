@@ -2258,3 +2258,151 @@ Stage 12's 76,800-pixel band sample — a coarser but strictly stronger region, 
 8–12 stray edge pixels Stage 12 reported do not reappear.) The alpha path's 782/1,576 near-black
 pixels at t=2/3 are the plate's own dark text edges, three orders of magnitude short of a
 rectangle.
+
+## Stage 18 — glyph-edge ripple: the alpha plane is quantised too
+
+`orbit-headline-Rep` showed uneven, faintly rippling glyph contours at any zoom. Same
+discipline as Stage 17: isolate the stage before touching a setting.
+
+### The probe
+
+The measurement is only as good as its reference, so the probe is chosen for provable
+flatness rather than by eye. On frame 89 the left stem edge at **x=1307-1310 is
+byte-identical on all 159 rows from y=194 to y=353** (alpha `0, 12, 192, 255`, blue
+`0, 64, 77, 77`, every row). The raw ripple there is therefore *exactly* zero, and any
+row-to-row variation downstream is the artifact, in luminance units. Renders are
+deterministic, so the probe survives a re-render: frame 89's sha1 was identical across two
+runs with the same props.
+
+### Stage 1: the raw PNGs are clean
+
+`0 0 0 0 12 192 255 255 255` across the edge - a clean two-pixel monotone ramp, no
+overshoot, no undershoot, identical on every row. Ripple **0.000**. Motion Canvas
+anti-aliasing is not involved.
+
+### Stage 2: which encode setting
+
+Ripple = row-to-row std of the composited value down the flat run, summed over the 4 edge
+columns.
+
+| encode | ripple over white | grey | black | alpha peak-to-peak | bytes |
+|---|---|---|---|---|---|
+| raw PNG | **0.000** | 0.000 | 0.000 | 0 | — |
+| 4:2:0 crf 28 (was) | **7.255** | 3.626 | 0.590 | **35** | 375,102 |
+| 4:2:0 crf 10 | 1.834 | 1.059 | 0.392 | — | 856,026 |
+| **4:4:4** crf 28 | **7.370** | 3.796 | 0.725 | 35 | 459,502 |
+| 4:4:4 crf 10 | 1.691 | 0.905 | 0.223 | — | 1,110,863 |
+| 4:4:4 lossless | 0.000 | 0.000 | 0.000 | 0 | 4,258,514 |
+
+**Chroma subsampling is not the cause.** 4:2:0 to 4:4:4 at the same CRF makes it very
+slightly *worse* (7.255 to 7.370). **Quantisation is**: CRF 28 to 10 at the same 4:2:0 is a
+4x reduction.
+
+Recompositing the probe with one side's planes swapped separates the contributions instead
+of inferring them:
+
+| encode | actual | **alpha plane only** | colour planes only |
+|---|---|---|---|
+| 4:2:0 crf 28 | 7.255 | **7.303** | 0.516 |
+| 4:4:4 crf 28 | 7.370 | **7.303** | 0.644 |
+| 4:4:4 crf 10 | 1.691 | 1.561 | 0.223 |
+| 4:4:4 lossless | 0.000 | 0.000 | 0.000 |
+
+The alpha plane carries **~93%** of it, and its contribution is *identical* in 4:2:0 and
+4:4:4 — as it must be, because VP9 stores alpha as a separate full-resolution greyscale
+stream. That stream gets the same `-crf`. The raw alpha edge is `192` on all 159 rows;
+decoded at crf 28 it wanders over `[177, 190, 191, 192, 193, 194, 201]`.
+
+Alpha is not *mishandled* — nothing is premultiplied wrong or mismatched to colour. It is
+merely quantised like any other plane.
+
+### Colour-independent, so it is every alpha component
+
+Re-rendered with `textColor: #ffffff`: alpha ripple **7.168 std / 29 p2p**, against
+**7.422 / 35** for `#00004d`. What changes is only visibility — dark glyphs ripple against
+light backgrounds, light glyphs against dark:
+
+| glyph | over white | over grey | over black |
+|---|---|---|---|
+| `#00004d` | **7.255** | 3.626 | 0.590 |
+| `#ffffff` | 0.470 | 3.572 | **6.698** |
+
+### The fix: crf 20
+
+`encodeWebm` in `scripts/render.mjs`. The sweep, all from one set of PNGs:
+
+| CRF | ripple | alpha p2p | bytes | vs 28 |
+|---|---|---|---|---|
+| 4 | 0.942 | 2 | 1,434,271 | 3.82x |
+| 12 | 2.685 | 5 | 765,194 | 2.04x |
+| 16 | 2.771 | 6 | 621,028 | 1.66x |
+| **20** | **2.953** | **8** | 536,335 | **1.43x** |
+| 24 | 4.315 | 20 | 467,896 | 1.25x |
+| 28 (was) | 7.255 | 35 | 375,102 | 1.00x |
+| lossless | 0.204 | 0 | 3,746,016 | 9.99x |
+
+4:4:4 was rejected: it removes 0.2 of ~7.3, costs 22% more bytes, and ffmpeg refuses
+`yuva444p` without `-strict experimental` ("Pixel format 'yuva444p' is not widely
+supported"), producing **Profile 1** files — an untested risk for the editor's decode path
+for no visible gain. CRF is Profile 0 and `yuva420p` either way, so nothing downstream
+changes.
+
+### Verification
+
+**Ripple, the pinned probe, identical PNG frames re-encoded both ways:**
+
+| | ripple | alpha p2p |
+|---|---|---|
+| raw PNG | 0.000 | 0 |
+| crf 28 | 7.255 | 35 |
+| **crf 20** | **2.953** | **8** |
+
+Exactly the sweep's prediction. Per component, on each one's own longest flat run (the
+probe finds its own, so absolute values differ with content; alpha peak-to-peak is the
+encode-level quantity that transfers):
+
+| component | flat run | ripple crf 28 -> 20 | alpha p2p |
+|---|---|---|---|
+| `orbit-headline-Rep` | 158 rows, x 570-576 | 5.277 -> 3.173 | 27 -> 19 |
+| `stat-counter` | 143 rows, x 758-764 | 7.177 -> 5.031 (over black) | 26 -> 7 |
+| `turbulent-background-Rep` | 237 rows, x 0-6 | 3.388 -> 3.012 | 5 -> **0** |
+
+`turbulent-background-Rep`'s residual 3.012 is identical over white, grey and black, so it
+is colour-plane quantisation in dense photographic content, not alpha.
+
+**Sizes, measured on identical PNG frames:**
+
+| component | crf 28 | crf 20 | ratio |
+|---|---|---|---|
+| `orbit-headline-Rep` | 375,102 | 536,335 | 1.43x |
+| `stat-counter` | 267,004 | 341,192 | 1.28x |
+| `turbulent-background-Rep` | 570,949 | 1,016,507 | 1.78x |
+
+1.28-1.78x, not runaway. `turbulent-background-Rep` is the outlier: a full-frame
+photographic gradient under a turbulence warp is the hardest thing in the library to
+compress, so a lower CRF costs it most.
+
+### Does the project export compound it? No — it adds a different error
+
+Both component encodes were put under a white background clip and exported to h264 (High,
+yuv420p, ~4.2 Mbps). Measured on a wider 12-column window so an offset search had room;
+**the best alignment was offset 0 for all four**, so the probe is valid at the export stage.
+
+| stage | ripple | MAE vs ideal |
+|---|---|---|
+| ideal (raw over white) | 0.000 | 0.000 |
+| component webm, crf 28 | 10.583 | 0.932 |
+| h264 export of crf 28 | 8.344 | **1.850** |
+| component webm, crf 20 | 5.901 | 0.446 |
+| h264 export of crf 20 | 4.939 | **2.051** |
+
+The export *lowers* row-to-row unevenness (8.344 < 10.583). It is not fixing anything: the
+error against the ideal edge roughly doubles at crf 28 and more than quadruples at crf 20,
+because h264's re-quantisation and deblocking low-pass the contour. Unevenness falls,
+fidelity falls with it. **Reporting ripple alone would have read as the export improving
+things**, which is why the MAE column exists.
+
+Two conclusions. The component-side fix survives to the delivered file — final-export ripple
+**8.344 -> 4.939** — and the export now contributes a roughly constant **~2 MAE** of its own
+edge error regardless of component CRF, which is the floor on final edge fidelity. Lowering
+that floor means the export's own encoder settings: a separate lever, untouched here.

@@ -229,8 +229,14 @@ async function encodeWebm({ framesDir, fps, out, background }) {
     background ? "yuv420p" : "yuva420p",
     "-b:v",
     "0",
+    // CRF 20, not the more usual 28. VP9 stores alpha as a separate full-resolution
+    // greyscale stream that gets this same CRF, and quantising it visibly ripples glyph
+    // contours: on a stem edge the renderer draws byte-identically for 159 rows, crf 28
+    // wobbles the decoded alpha by +-12 (peak-to-peak 35), which reads as uneven, fuzzy
+    // type at any zoom. crf 20 brings that to 8 for 1.4x the bytes. Chroma subsampling is
+    // not the cause and 4:4:4 does not help - see Stage 18 in NOTES.md.
     "-crf",
-    "28",
+    "20",
     "-row-mt",
     "1",
     "-auto-alt-ref",
