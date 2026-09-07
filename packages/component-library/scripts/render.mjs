@@ -87,7 +87,7 @@ function parseArgs(argv) {
 }
 
 /**
- * A component may declare its own frame size in meta.json — turbulent-background renders
+ * A component may declare its own frame size in meta.json — turbulent-background-Rep renders
  * 9:16. Explicit --width/--height still win; this only fills in what was not passed.
  */
 async function componentDefaults(component) {

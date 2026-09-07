@@ -1,6 +1,6 @@
 import { makeProject } from "@motion-canvas/core";
 
-import scene from "../scenes/turbulent-background?scene";
+import scene from "../scenes/turbulent-background-Rep?scene";
 import { resolveProps } from "../lib/props";
 
 export const DEFAULT_PROPS = {

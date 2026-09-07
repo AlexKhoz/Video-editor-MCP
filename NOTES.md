@@ -2,6 +2,26 @@
 
 Engineering notes for the browser video editor prototype.
 
+## Conventions
+
+Standing rules that apply to future work, kept here so they survive between sessions.
+
+- **Custom components carry a `-Rep` suffix on both the id and the display name.** Every
+  component we build from now on is named `<thing>-Rep` with a display name ending in
+  " Rep" — e.g. id `orbit-headline-Rep`, name "Orbit Headline Rep". Applied retroactively to
+  the two Stage 13/14 components in Stage 15; the six earlier ones (animated-text,
+  color-transition, logo-reveal, logo-reveal-v2, lower-third, stat-counter) keep their
+  original ids deliberately, since renaming them would break the projects and
+  component_metadata rows that already reference them.
+- **A component's directory name must equal its `meta.json` id.** `listComponents` throws on
+  a mismatch, so a rename means moving the directory too. By convention the project and scene
+  filenames match as well (`src/projects/<id>.ts`, `src/scenes/<id>.tsx`), and `meta.json`'s
+  `project` field is what actually resolves the path.
+- **Adding or renaming a component touches four places**: `components/<id>/meta.json`,
+  `src/projects/<id>.ts`, `src/scenes/<id>.tsx`, plus registration in *both*
+  `src/render-harness.ts` (import + `PROJECTS` key, which is the id used by the API and CLI)
+  and `vite.config.ts` (the `project:` list).
+
 ## Stage 0 — Environment
 
 | Tool | Version | Status |
@@ -2042,3 +2062,27 @@ eight components.
   keep it, so the reconstruction inherits a one-frame scale dip at the very end.
 - The 3.5-frame entry offset of `talk` puts its orbit mid-key at 52.2% of its own span rather
   than 50%; the component uses 50% for every word. Difference is under half a degree.
+
+## Stage 15 — `-Rep` suffix on custom components
+
+Renamed the two components built in Stages 13 and 14:
+
+| before | after (id) | after (name) |
+|---|---|---|
+| `turbulent-background` | `turbulent-background-Rep` | Turbulent Background Rep |
+| `orbit-headline` | `orbit-headline-Rep` | Orbit Headline Rep |
+
+The request named the first one `turbulent-bg-new`; no such id existed — the actual id was
+`turbulent-background`, and that is what was renamed.
+
+Each rename touched: the component directory (which `listComponents` requires to equal the
+id), `meta.json`'s `id`, `name` and `project`, the project and scene filenames, the scene's
+bundled-asset import path (`components/turbulent-background-Rep/assets/`), the `?scene` import
+inside the project, the harness import and `PROJECTS` key, the `vite.config.ts` project list,
+and two comments that named the old id. Uppercase in an id is safe: nothing on the
+componentId path lowercases or sanitises it (the only `toLowerCase` in the service is on a
+file extension).
+
+Historical stage prose above still refers to the old ids, which is left as-is — those sections
+record what was built at the time, and rewriting them would falsify the log. The convention
+itself is at the top of this file.

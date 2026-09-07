@@ -25,9 +25,9 @@ import colorTransition from "./projects/color-transition?project";
 import logoReveal from "./projects/logo-reveal?project";
 import logoRevealV2 from "./projects/logo-reveal-v2?project";
 import lowerThird from "./projects/lower-third?project";
-import orbitHeadline from "./projects/orbit-headline?project";
+import orbitHeadline from "./projects/orbit-headline-Rep?project";
 import statCounter from "./projects/stat-counter?project";
-import turbulentBackground from "./projects/turbulent-background?project";
+import turbulentBackground from "./projects/turbulent-background-Rep?project";
 
 const PROJECTS: Record<string, Project> = {
   "animated-text": animatedText,
@@ -36,8 +36,8 @@ const PROJECTS: Record<string, Project> = {
   "lower-third": lowerThird,
   "logo-reveal-v2": logoRevealV2,
   "stat-counter": statCounter,
-  "turbulent-background": turbulentBackground,
-  "orbit-headline": orbitHeadline,
+  "turbulent-background-Rep": turbulentBackground,
+  "orbit-headline-Rep": orbitHeadline,
 };
 
 interface RenderReport {

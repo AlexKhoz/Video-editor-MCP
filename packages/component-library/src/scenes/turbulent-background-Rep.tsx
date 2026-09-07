@@ -3,11 +3,11 @@ import { createSignal, tween, useScene } from "@motion-canvas/core";
 
 import { TURBULENCE_FRAGMENT } from "../shaders/turbulence";
 
-import brand1 from "../../components/turbulent-background/assets/brand-1.jpg";
-import brand2 from "../../components/turbulent-background/assets/brand-2.jpg";
-import brand3 from "../../components/turbulent-background/assets/brand-3.jpg";
-import brand4 from "../../components/turbulent-background/assets/brand-4.jpg";
-import brand5 from "../../components/turbulent-background/assets/brand-5.jpg";
+import brand1 from "../../components/turbulent-background-Rep/assets/brand-1.jpg";
+import brand2 from "../../components/turbulent-background-Rep/assets/brand-2.jpg";
+import brand3 from "../../components/turbulent-background-Rep/assets/brand-3.jpg";
+import brand4 from "../../components/turbulent-background-Rep/assets/brand-4.jpg";
+import brand5 from "../../components/turbulent-background-Rep/assets/brand-5.jpg";
 
 const TAU = Math.PI * 2;
 

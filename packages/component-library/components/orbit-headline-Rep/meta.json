@@ -1,8 +1,8 @@
 {
-  "id": "orbit-headline",
-  "name": "Orbit Headline",
+  "id": "orbit-headline-Rep",
+  "name": "Orbit Headline Rep",
   "description": "Parametric reconstruction of an After Effects headline: words scale in one after another and drift along shallow arcs under a slow group zoom, staying upright throughout. Curves are ported from the original Bodymovin export, so any duration keeps the source's timing character.",
-  "project": "src/projects/orbit-headline.ts",
+  "project": "src/projects/orbit-headline-Rep.ts",
   "durationParam": "durationInSeconds",
   "params": [
     {
@@ -19,7 +19,12 @@
       "default": "Archivo Black",
       "description": "Any font installed where the render runs. The original used the commercial Widescreen-Bold, which is not available here; Archivo Black is the closest wide, heavy grotesque, and it falls back to Arial Black then sans-serif."
     },
-    { "key": "textColor", "label": "Text colour", "type": "color", "default": "#00004d" },
+    {
+      "key": "textColor",
+      "label": "Text colour",
+      "type": "color",
+      "default": "#00004d"
+    },
     {
       "key": "durationInSeconds",
       "label": "Duration (s)",

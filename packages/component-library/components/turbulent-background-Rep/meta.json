@@ -1,8 +1,8 @@
 {
-  "id": "turbulent-background",
-  "name": "Turbulent Background",
+  "id": "turbulent-background-Rep",
+  "name": "Turbulent Background Rep",
   "description": "A still background image warped by a slowly churning turbulence field, looping seamlessly. Renders 9:16 (1080x1920) by default. Pick one of five bundled brand gradients, or set backgroundPreset to \"custom\" and pass an image URL.",
-  "project": "src/projects/turbulent-background.ts",
+  "project": "src/projects/turbulent-background-Rep.ts",
   "durationParam": "durationInSeconds",
   "defaultWidth": 1080,
   "defaultHeight": 1920,
