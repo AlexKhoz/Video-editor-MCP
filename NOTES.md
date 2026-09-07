@@ -2123,3 +2123,138 @@ projects are still loadable.
 Verified: `GET /components` returns exactly the three; `POST /render` 404s for all five deleted
 ids; `stat-counter` renders 89 frames at 1920x1080 through the CLI and through the queue; the
 render-service suite passes against the repointed component.
+
+## Stage 17 — export judder: 1ms container timestamps vs a 1e-8 match tolerance
+
+`orbit-headline-Rep` looked correct in the editor's live preview but visibly juddered in the
+exported MP4, which nonetheless reported a clean 30fps. Same shape as Stage 7's alpha bug:
+preview and export do not share a decode path.
+
+### Isolation: the component render is fine, the project export is not
+
+Ordered, before touching anything:
+
+| step | finding |
+|---|---|
+| raw `render.mjs` webm, frame-by-frame | smooth — 170 distinct frames, no repeats |
+| `ffprobe` on the raw webm | `r_frame_rate=30/1`, `avg_frame_rate=30/1`, 170 frames, **`time_base=1/1000`** |
+| per-frame `pts_time` | `0.000 0.033 0.067 0.100 0.133 0.167 …` |
+| the same instants at exact 30fps | `0.000000 0.033333 0.066667 0.100000 0.133333 0.166667 …` |
+| exported MP4 | 30fps container, but 33 byte-identical consecutive frame pairs |
+
+So: **a project-export bug**, not a component-generation bug. The generator is blameless; the
+component's own bezier evaluator and phrase boundaries were never involved.
+
+### Root cause
+
+Matroska/WebM stores timestamps on a grid set by `TimecodeScale`, which defaults to 1ms.
+1/30s = 33.333ms is not representable, so every frame lands up to 0.5ms away from its ideal
+time; `-video_track_timescale` does not help, the WebM muxer ignores it.
+
+`ExportFrameDecoder.getSequentialFrame` (`apps/editor/packages/core/src/media/mediabunny-engine.ts`)
+asked for exact `k/fps` instants and matched them with `1e-8` of slack:
+
+```ts
+if (this.nextFrame && this.nextFrame.timestamp <= timestamp + 1e-8) { /* advance */ }
+```
+
+Frame 1 wants 0.033333 but is stored at 0.033 (accepted), frame 2 wants 0.066667 and is stored
+at 0.067 — 0.33ms *late*, so it is rejected and the previous frame is emitted again. The next
+request, 0.100000, then finds two frames ready and skips one. The result is a 3-frame
+repeat/skip cycle: one third of the export is right, one third is a repeat, one third is a
+skip. Structurally invisible to `ffprobe` — every output frame is on time, they just show the
+wrong source frames.
+
+Simulating both rules against the real timestamp lists reproduces it exactly, and predicts the
+same 34% for every component in the library:
+
+| source | frames | OLD `1e-8` | NEW rule |
+|---|---|---|---|
+| `orbit-headline-Rep` | 170 | `{0: 56, 1: 57, 2: 56}` — 34% clean | `{1: 169}` — 100% |
+| `turbulent-background-Rep` | 92 | `{0: 30, 1: 31, 2: 30}` — 34% | `{1: 91}` — 100% |
+| `stat-counter` | 96 | `{0: 32, 1: 32, 2: 31}` — 34% | `{1: 95}` — 100% |
+| index-coded probe | 170 | `{0: 56, 1: 57, 2: 56}` — 34% | `{1: 169}` — 100% |
+
+### Fix
+
+One file. `TIMESTAMP_TOLERANCE = 0.0015` (1.5ms — three times the worst quantisation error,
+and still under half of a 240fps frame), additionally capped at a quarter of the observed
+frame spacing so it can never span a whole frame, applied to both forward comparisons. The
+backwards-seek check keeps `1e-8`: erring towards a re-decode is cheap, erring towards a stale
+frame is the bug being fixed.
+
+### Two measurement traps hit on the way
+
+1. **The fingerprint matcher was below its noise floor.** `corr.py` matched each exported frame
+   to its nearest source frame by downscaled-grayscale MAD, and reported "78.7% clean" after
+   the fix. Worthless: all 169 consecutive source pairs of `orbit-headline-Rep` differ by less
+   than 0.5 MAD (median 0.011) while the encode noise is larger, so the matcher was choosing
+   between indistinguishable candidates. Replaced by exact-duplicate hashing plus a
+   purpose-built probe clip, and the rewritten matcher now prints its own separability and says
+   `BELOW NOISE FLOOR, verdict meaningless` when the comparison cannot carry a conclusion.
+2. **`${f%%:*}` split on the `C:` of a Windows path**, so a loop that looked like it measured
+   three files measured one of them three times. Redone with explicit paths.
+
+Also: cropping an export to its non-black bounding box is right for a pillarboxed 9:16 clip and
+wrong for content that simply does not fill the frame (`stat-counter` is a caption on
+transparency — cropping it gave a 76 MAD match error and nonsense correspondence). The matcher
+picks full-frame or content-box by whichever aspect matches the source.
+
+### Verification
+
+**1. `orbit-headline-Rep`, the reported case.** Exact byte-identical consecutive frame pairs in
+the export: **33 → 0**. Median frame-to-frame step restored from 0.008 to the source's 0.011.
+
+**2. An index-coded probe, to remove all doubt.** 170 solid-colour frames encoding their own
+index as `r = (i%16)*16+8`, `g = (i//16)*16+8` — a 16-level decision margin no lossy encode can
+blur — muxed with the same ffmpeg arguments (`time_base 1/1000`). Read back through the
+project export: **169/169 clean +1 steps, 0 repeats, 0 skips, first exported frame = source 0.**
+
+**3. `turbulent-background-Rep` (9:16, pillarboxed in a 16:9 project), before and after on the
+same project.** Source index per exported frame:
+
+```
+pre-fix   0 1 1 3 4 4 6 7 7 9 10 10 12 13 13 15 …   {0: 33, 1: 30, 2: 27}   32.6% clean
+post-fix  0 1 2 3 4 5 6 7 8  9 10 11 12 13 14 15 …  {0:  4, 1: 85, 2:  1}   92.4% clean
+```
+
+Post-fix runs +1 unbroken over 0–65 and 69–89. The residue is content, not decode: this
+component loops seamlessly, so its last frames genuinely match frame 0 (hence the `-89` step
+and the identical source pair at index 90), and frames 66–68 are near-static in both exports.
+
+**4. `stat-counter` — the predicted "affected but hidden by content" case.** Same project,
+before and after:
+
+```
+pre-fix   0 0 0 2 3 3 6 8 8 9 10 10 12 13 13 15 16 16 …   {0: 46, 1: 22, 2: 23}   23.2% clean
+post-fix  0 0 1 2 3 5 6 8 8 9 10 11 12 13 14 15 16 17 …   {0: 24, 1: 63, 2:  6}   66.3% clean
+```
+
+Post-fix, frames 15→66 are a perfect 52-step +1 run. The remaining repeats are all
+content-explained: a 20-frame static tail once the counter lands (source frames 68–87 are
+byte-identical to each other), the fade-in at the head, and the fade-out at the end. So yes —
+**every component in the library was juddering**, `stat-counter` merely hides it behind fast
+counting and a static tail.
+
+**5. Trimmed clips: the tolerance corrects trims, it does not shift them.** Clip A at
+`inPoint: 1` starts on source frame **30**; clip B at `inPoint: 1.0666667` — the quantisation-
+affected case — starts on source frame **32**; both then step `{1: 29}`. Under the old rule
+clip B started on frame 31, a stale frame.
+
+**6. Chroma and true-alpha export regressions (Stage 4/6/12), same decoder, same files.** Both
+150 frames, 5.000s, `r_frame_rate=30/1`:
+
+| | t=0.5 | t=2.0 | t=3.0 | t=4.5 |
+|---|---|---|---|---|
+| chroma path — green px (whole frame) | 0 | 0 | 0 | 0 |
+| chroma path — white glyph px | 0 | 10,655 | 10,658 | 0 |
+| chroma path — black px | 0 | 0 | 0 | 0 |
+| alpha path — green px | 0 | 0 | 0 | 0 |
+| alpha path — white glyph px | 0 | 8,405 | 8,415 | 0 |
+
+Green nowhere, the centre row never green, the component present exactly while its band is on
+screen and absent at 0.5s and 4.5s, no black rectangle. (Whole-frame counts here, against
+Stage 12's 76,800-pixel band sample — a coarser but strictly stronger region, which is why the
+8–12 stray edge pixels Stage 12 reported do not reappear.) The alpha path's 782/1,576 near-black
+pixels at t=2/3 are the plate's own dark text edges, three orders of magnitude short of a
+rectangle.

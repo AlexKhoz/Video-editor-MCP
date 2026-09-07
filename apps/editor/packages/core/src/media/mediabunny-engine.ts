@@ -126,6 +126,34 @@ export class ExportFrameDecoder {
     return true;
   }
 
+  /**
+   * Slack allowed when matching a requested timestamp to a source frame, in seconds.
+   *
+   * Source frame timestamps are quantised by the container. Matroska/WebM stores them on a
+   * 1ms grid (TimecodeScale defaults to 1,000,000ns and ffmpeg's webm muxer does not expose
+   * it), so a 30fps clip's frames land on 0.033 / 0.067 / 0.100 rather than exact multiples
+   * of 1/30 — an error of up to +-0.5ms. Comparing those against exact k/fps request times
+   * with only 1e-8 of slack rejected the correct frame roughly two times in three, and the
+   * export then repeated the previous frame and skipped the next: a 3-frame repeat/skip
+   * cycle that reads as judder while the file still reports a clean 30fps.
+   *
+   * 1.5ms absorbs that quantisation with margin and stays far below any real frame duration
+   * (a 240fps source has 4.2ms frames), and the effective value is additionally capped at a
+   * quarter of the observed frame spacing so it can never span a whole frame.
+   */
+  private static readonly TIMESTAMP_TOLERANCE = 0.0015;
+
+  /** Tolerance for the current decode position, narrowed to the local frame spacing. */
+  private timestampTolerance(): number {
+    const spacing =
+      this.currentFrame && this.nextFrame
+        ? this.nextFrame.timestamp - this.currentFrame.timestamp
+        : 0;
+    return spacing > 0
+      ? Math.min(ExportFrameDecoder.TIMESTAMP_TOLERANCE, spacing * 0.25)
+      : ExportFrameDecoder.TIMESTAMP_TOLERANCE;
+  }
+
   async getFrame(timestamp: number): Promise<OffscreenCanvas | null> {
     const framePromise = this.decodeTail.then(() => this.getSequentialFrame(timestamp));
     this.decodeTail = framePromise.then(
@@ -161,7 +189,7 @@ export class ExportFrameDecoder {
         }
       }
 
-      if (this.nextFrame && this.nextFrame.timestamp <= timestamp + 1e-8) {
+      if (this.nextFrame && this.nextFrame.timestamp <= timestamp + this.timestampTolerance()) {
         this.currentFrame = this.nextFrame;
         this.nextFrame = null;
         continue;
@@ -169,7 +197,10 @@ export class ExportFrameDecoder {
       break;
     }
 
-    if (this.currentFrame.timestamp > timestamp + 1e-8) return null;
+    // Same tolerance as the advance above; without it the first frame of a clip whose
+    // timestamp rounded up would be dropped entirely. The backwards-seek check further up
+    // keeps its 1e-8, which errs towards re-decoding rather than showing a stale frame.
+    if (this.currentFrame.timestamp > timestamp + this.timestampTolerance()) return null;
 
     const w = this.currentFrame.canvas.width;
     const h = this.currentFrame.canvas.height;
