@@ -1610,7 +1610,7 @@ visibly different frames; and extracting a PNG from a VP9-alpha WebM **without
 `-c:v libvpx-vp9`** yields a fully opaque frame, so alpha-based counting measures nothing.
 Colour-by-radius with the explicit decoder is what showed the difference.
 
-### 7. Preview effects after reload — investigated, plan pending approval
+### 7. Preview effects after reload — fixed for the reload path (73df62b)
 
 **Stage 7's diagnosis was aimed at the wrong thing.** The editor already has a canonical
 hydrator: `syncProjectEffectsBridge` (`project-store.ts:769`) walks every clip and calls
@@ -1631,3 +1631,61 @@ Two concrete gaps found instead:
   symptom: right in-session, wrong after reload, export always fine.
 - `replaceMediaAsset` calls `set({ project })` with **no** `syncClipEffectsBridge` — the
   media-swap half of the bug.
+
+#### Outcome (73df62b)
+
+**The gate falsified my own hypothesis, and that was the point of having one.**
+
+Instrumented probes on a real reload — the one that shows *Recover Your Work* — printed:
+
+```
+[S12-PROBE] initializeEffectsBridge resolved
+[S12-PROBE] recoverFromAutoSave called
+[S12-PROBE] after recover: clip=297a04f4 storedEffects=["chromaKey"] bridgeEffects=0 isInitialized=true
+```
+
+- `isInitialized=true` — the bridge is ready. **Not a timing race.**
+- No sync line follows, because a reload never goes through `loadProject`. It goes through
+  **`recoverFromAutoSave`**, which set the project and never called the sync. Of the three
+  paths that open a project (`createProject` 1716, `loadProject` 1770, `recoverFromAutoSave`
+  3047) it was the only one missing it.
+
+So the planned `EditorInterface` change would have been a **no-op** — bridge init resolves
+*before* recovery runs — and it was dropped. Had the gate been skipped, that no-op would have
+shipped "verified" against a path that was never broken.
+
+The fix is the single call `loadProject` already makes, through the same `deserializeEffects`
+route undo/redo uses — not `applyVideoEffect`, which is what blanked the frame in Stage 7.
+
+Same project, same playhead (00:02:12) throughout:
+
+| | band row (green / gradient / plate) | centre row |
+|---|---|---|
+| before reload (`loadProject`) | 0 / 521 / 439 | 0 / 960 |
+| after reload, **pre-fix** | **514** / 7 / 439 | **960** / 0 |
+| after reload, **post-fix** | **0 / 521 / 439** | **0 / 960** |
+
+Post-fix matches the baseline digit for digit, and the plate is still at 439 — the effect is
+applied, not over-applied, which was Stage 7's failure mode.
+
+True-alpha regression (transparent component, no chromaKey at all): band 0 / 520 / 440 both
+before and after a recovery. 80 project-store tests pass.
+
+#### The media-swap half: fix withheld on evidence
+
+The approved plan also had `syncClipEffectsBridge` added to `replaceMediaAsset`. Reading the
+code first showed why that would be another no-op: `handleRegenerate` calls
+`replaceMediaAsset(clip.mediaId, file)`, which rewrites the **media item only** — clip ids and
+`clip.effects` are untouched, so the bridge entry (keyed by clip id) stays valid across a swap.
+The Stage 7 observation was most likely the reload bug seen after a re-render, or a stale
+decode cache, which is a different mechanism.
+
+Not added, pending the empirical swap test, which needs Redis and the render worker for a real
+re-render.
+
+#### Gotcha: sample only after the composite settles
+
+A first post-fix reading showed `green 0` **and** `plate 0` — which looks like the Stage 7
+over-keying failure. It was neither: the preview composites asynchronously and the component
+layer had not been drawn yet. A whole-frame scan found the plate and text present a moment
+later. Assert that the expected feature *is* there, not merely that the artefact is gone.
