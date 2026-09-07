@@ -131,8 +131,8 @@ server.registerTool(
   {
     title: "List animated components",
     description:
-      "Lists the animated overlay components available to render (animated text, lower " +
-      "thirds, logo reveals, a stat counter, a colour transition). Returns each component's " +
+      "Lists the animated overlay components available to render (a stat counter, a 9:16 " +
+      "turbulent background, an orbit headline). Returns each component's " +
       "id, name, description and parameter schema — parameter types follow the editor's " +
       "vocabulary: text, number, color, boolean, media. Call this before generate_component " +
       "so you know which ids and props exist.",
@@ -160,7 +160,7 @@ server.registerTool(
       "local file path you can pass straight to upload_media. Pass background as a hex " +
       "colour only if you specifically want a solid backdrop instead of transparency.",
     inputSchema: {
-      componentId: z.string().describe('Component id from list_components, e.g. "lower-third".'),
+      componentId: z.string().describe('Component id from list_components, e.g. "orbit-headline-Rep".'),
       props: z
         .record(z.union([z.string(), z.number(), z.boolean()]))
         .optional()

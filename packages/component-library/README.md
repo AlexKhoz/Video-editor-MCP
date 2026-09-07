@@ -8,15 +8,17 @@ out of this repo unchanged.
 
 | id | params (`type` from OpenReel's `MotionVariable` vocabulary) |
 |---|---|
-| `animated-text` | `text: text`, `color: color`, `durationInSeconds: number` |
-| `logo-reveal` | `primaryColor: color`, `durationInSeconds: number` |
-| `logo-reveal-v2` | `primaryColor: color`, `durationInSeconds: number` — geometric shard assembly, a visually distinct alternative to `logo-reveal` |
-| `lower-third` | `title: text`, `subtitle: text`, `accentColor: color`, `durationInSeconds: number` |
 | `stat-counter` | `label: text`, `targetNumber: number`, `accentColor: color`, `durationInSeconds: number` |
-| `color-transition` | `fromColor: color`, `toColor: color`, `durationInSeconds: number` |
+| `turbulent-background-Rep` | `backgroundPreset: text`, `image: media`, `scale`/`offsetX`/`offsetY`, `displacementAmount`, `noiseScale`, `durationInSeconds` — renders 9:16 (1080x1920) by default |
+| `orbit-headline-Rep` | `text: text`, `fontFamily: text`, `textColor: color`, `durationInSeconds`, `zoomAmount`, `driftAmount`, `settleAmount`, `staggerSeconds` |
 
-The library deliberately covers overlays and graphics — text, logos, lower thirds, data readouts —
-and not clip-to-clip transitions: OpenReel already ships 24 native transition types (including
+Custom components carry a `-Rep` suffix on id and display name (see the Conventions section of
+NOTES.md). Five earlier components — `animated-text`, `logo-reveal`, `logo-reveal-v2`,
+`lower-third` and `color-transition` — were deleted in Stage 16 and remain recoverable from git
+history if ever needed.
+
+The library deliberately covers overlays, graphics and backgrounds, and not clip-to-clip
+transitions: OpenReel already ships 24 native transition types (including
 `flash` and `wipe`) that blend outgoing and incoming footage, which an overlay clip cannot do.
 
 Each one has a `components/<id>/meta.json` describing its params, defaults and ranges — that file is
@@ -25,12 +27,12 @@ the contract the editor UI and render-service read.
 ## Render one component
 
 ```bash
-node scripts/render.mjs --component animated-text \
-  --props '{"text":"Ship it","color":"#ffcc00","durationInSeconds":2}' \
+node scripts/render.mjs --component stat-counter \
+  --props '{"label":"Active users","targetNumber":1250,"durationInSeconds":3}' \
   --out ../../storage/rendered/demo.webm
 ```
 
-Flags: `--component` `--props` `--out` `--fps` (30) `--width` (1920) `--height` (1080)
+Flags: `--component` `--props` `--out` `--fps` (30) `--width` `--height` (default to the
 `--background` `--keep-frames`.
 
 With no `--background` the render is transparent (VP9 + `yuva420p`). Pass `--background "#00ff00"`

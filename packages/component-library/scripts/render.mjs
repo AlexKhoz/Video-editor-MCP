@@ -2,8 +2,8 @@
 /**
  * Renders one component to a transparent WebM.
  *
- *   node scripts/render.mjs --component animated-text \
- *     --props '{"text":"Ship it","color":"#ff0055","durationInSeconds":2}' \
+ *   node scripts/render.mjs --component stat-counter \
+ *     --props '{"label":"Active users","targetNumber":1250,"durationInSeconds":3}' \
  *     --out ../../storage/rendered/demo.webm
  *
  * Pipeline: Vite dev server -> headless Chrome loads render-harness.html ->

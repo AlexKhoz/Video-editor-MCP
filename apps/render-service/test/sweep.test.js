@@ -62,7 +62,7 @@ test("rendered: keeps referenced files, removes unreferenced ones past the grace
 
   db.upsertComponentMetadata({
     mediaId: "media-x",
-    componentId: "lower-third",
+    componentId: "stat-counter",
     props: {},
     background: null,
     renderedFileId: "keep-by-metadata.webm",

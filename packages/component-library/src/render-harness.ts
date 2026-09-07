@@ -7,7 +7,7 @@
  * loads to drive that pipeline without the editor UI.
  *
  * Query parameters:
- *   project  component id (animated-text | logo-reveal | color-transition)
+ *   project  component id (stat-counter | turbulent-background-Rep | orbit-headline-Rep)
  *   props    URL-encoded JSON, read by src/lib/props.ts inside the project module
  *   fps      frames per second (default 30)
  *   width    frame width in px (default 1920)
@@ -20,21 +20,11 @@
 import { Renderer, Vector2 } from "@motion-canvas/core";
 import type { Project } from "@motion-canvas/core";
 
-import animatedText from "./projects/animated-text?project";
-import colorTransition from "./projects/color-transition?project";
-import logoReveal from "./projects/logo-reveal?project";
-import logoRevealV2 from "./projects/logo-reveal-v2?project";
-import lowerThird from "./projects/lower-third?project";
 import orbitHeadline from "./projects/orbit-headline-Rep?project";
 import statCounter from "./projects/stat-counter?project";
 import turbulentBackground from "./projects/turbulent-background-Rep?project";
 
 const PROJECTS: Record<string, Project> = {
-  "animated-text": animatedText,
-  "logo-reveal": logoReveal,
-  "color-transition": colorTransition,
-  "lower-third": lowerThird,
-  "logo-reveal-v2": logoRevealV2,
   "stat-counter": statCounter,
   "turbulent-background-Rep": turbulentBackground,
   "orbit-headline-Rep": orbitHeadline,
@@ -54,7 +44,7 @@ declare global {
 
 const status = document.getElementById("status");
 const params = new URLSearchParams(location.search);
-const projectName = params.get("project") ?? "animated-text";
+const projectName = params.get("project") ?? "stat-counter";
 const fps = Number(params.get("fps") ?? 30);
 const width = Number(params.get("width") ?? 1920);
 const height = Number(params.get("height") ?? 1080);

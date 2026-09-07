@@ -9,10 +9,9 @@ Standing rules that apply to future work, kept here so they survive between sess
 - **Custom components carry a `-Rep` suffix on both the id and the display name.** Every
   component we build from now on is named `<thing>-Rep` with a display name ending in
   " Rep" — e.g. id `orbit-headline-Rep`, name "Orbit Headline Rep". Applied retroactively to
-  the two Stage 13/14 components in Stage 15; the six earlier ones (animated-text,
-  color-transition, logo-reveal, logo-reveal-v2, lower-third, stat-counter) keep their
-  original ids deliberately, since renaming them would break the projects and
-  component_metadata rows that already reference them.
+  the two Stage 13/14 components in Stage 15. `stat-counter` keeps its original id: it is the
+  only pre-`-Rep` component still in the library after Stage 16, and renaming it would break
+  the projects and component_metadata rows that reference it.
 - **A component's directory name must equal its `meta.json` id.** `listComponents` throws on
   a mismatch, so a rename means moving the directory too. By convention the project and scene
   filenames match as well (`src/projects/<id>.ts`, `src/scenes/<id>.tsx`), and `meta.json`'s
@@ -2086,3 +2085,41 @@ file extension).
 Historical stage prose above still refers to the old ids, which is left as-is — those sections
 record what was built at the time, and rewriting them would falsify the log. The convention
 itself is at the top of this file.
+
+## Stage 16 — deleted five components
+
+Removed `animated-text`, `color-transition`, `logo-reveal`, `logo-reveal-v2` and `lower-third`
+on request, leaving three: `stat-counter`, `turbulent-background-Rep`, `orbit-headline-Rep`.
+
+Each deletion took the component directory, `src/projects/<id>.ts`, `src/scenes/<id>.tsx` and
+their `.meta` sidecars, plus the `render-harness.ts` import and `PROJECTS` entry and the
+`vite.config.ts` project entry. Beyond that, six places referenced the dead ids and would have
+broken quietly:
+
+- **`render-harness.ts` defaulted to `?? "animated-text"`** when no `project` query parameter
+  was supplied — a deleted project. Now defaults to `stat-counter`.
+- **`render-service/test/render-e2e.test.js` rendered `animated-text`** in four places: the
+  catalogue assertion, the props-rejection case, the render itself and a prop echo check.
+  Repointed to `stat-counter` (`label`/`accentColor` instead of `text`/`color`, and duration 2
+  since `stat-counter`'s schema has `min: 2`).
+- `render-service/test/sweep.test.js` used `"lower-third"` as a synthetic `component_metadata`
+  fixture — cosmetic, updated anyway.
+- The MCP `list_components` description named the old catalogue, and `generate_component`'s
+  `componentId` example was `"lower-third"`. Both now describe the surviving three.
+- Three READMEs: the component table and CLI example in `packages/component-library`, the curl
+  example and test description in `apps/render-service`, and the test/CLI blocks in the root.
+- `render.mjs`'s usage comment.
+
+Not touched: `apps/editor/**` matches for "logo-reveal" and "lower-third" are the vendored
+OpenReel fork's own template and motion-preset names (`branding-lower-third` and similar),
+unrelated to our component ids.
+
+**Live data note.** `lower-third` had 2 `component_metadata` rows and 2 saved projects
+referencing it at deletion time (the Stage 12 swap-test projects). Those clips keep their media
+and still render, but the Component Library panel can no longer re-render them, because
+`POST /render` now 404s on that id. The rows were left in place rather than swept, since the
+projects are still loadable.
+
+Verified: `GET /components` returns exactly the three; `POST /render` 404s for all five deleted
+ids; `stat-counter` renders 89 frames at 1920x1080 through the CLI and through the queue; the
+render-service suite passes against the repointed component.

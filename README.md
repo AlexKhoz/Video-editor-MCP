@@ -175,13 +175,13 @@ footage properly. This library is for overlays and graphics, not transitions.
 cd apps/render-service && npm test
 ```
 
-Renders `animated-text` through the real API and checks the file exists, is non-empty, matches the
+Renders `stat-counter` through the real API and checks the file exists, is non-empty, matches the
 reported byte count, downloads as `video/webm` and starts with WebM's EBML magic. Needs Redis, ffmpeg
 and Chrome.
 
 ```bash
-cd packages/component-library && node scripts/render.mjs --component animated-text \
-  --props '{"text":"Hello","color":"#ffcc00","durationInSeconds":2}' \
+cd packages/component-library && node scripts/render.mjs --component stat-counter \
+  --props '{"label":"Active users","targetNumber":1250,"durationInSeconds":3}' \
   --out ../../storage/rendered/demo.webm
 ```
 

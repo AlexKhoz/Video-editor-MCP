@@ -11,11 +11,6 @@ export default defineConfig({
   plugins: [
     (motionCanvas as typeof motionCanvasModule)({
       project: [
-        "./src/projects/animated-text.ts",
-        "./src/projects/logo-reveal.ts",
-        "./src/projects/color-transition.ts",
-        "./src/projects/lower-third.ts",
-        "./src/projects/logo-reveal-v2.ts",
         "./src/projects/stat-counter.ts",
         "./src/projects/turbulent-background-Rep.ts",
         "./src/projects/orbit-headline-Rep.ts",

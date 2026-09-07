@@ -71,7 +71,7 @@ editor sends `#00ff00` for chroma keying), omit it for the native transparent re
 ```bash
 curl -X POST http://127.0.0.1:3001/render \
   -H 'content-type: application/json' \
-  -d '{"componentId":"animated-text","props":{"text":"Ship it","color":"#ffcc00","durationInSeconds":2}}'
+  -d '{"componentId":"stat-counter","props":{"label":"Active users","targetNumber":1250,"durationInSeconds":3}}'
 
 curl http://127.0.0.1:3001/render/1
 ```
@@ -98,6 +98,6 @@ Environment variables, all optional: `PORT` (3001), `HOST` (127.0.0.1), `REDIS_H
 npm test
 ```
 
-Renders `animated-text` with custom text through the real API and asserts the file exists, is
+Renders `stat-counter` through the real API and asserts the file exists, is
 non-empty, matches the reported byte count, downloads over HTTP and starts with WebM's EBML magic
 bytes. Requires Redis, ffmpeg and Chrome. `KEEP_TEST_OUTPUT=1` leaves the rendered file behind.

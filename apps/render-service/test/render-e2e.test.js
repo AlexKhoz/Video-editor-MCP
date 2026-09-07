@@ -1,5 +1,5 @@
 /**
- * Minimal end-to-end test: ask the API to render `animated-text` with custom text,
+ * Minimal end-to-end test: ask the API to render `stat-counter` with custom props,
  * wait for the job to finish, and confirm the file exists and is non-empty.
  *
  * Needs Redis (infra/docker-compose.yml) and, because it runs the real Stage 2
@@ -19,7 +19,7 @@ import { config } from "../src/config.js";
 
 const PORT = Number(process.env.TEST_PORT ?? 3199);
 const BASE = `http://127.0.0.1:${PORT}`;
-const TEST_TEXT = "E2E render";
+const TEST_LABEL = "E2E render";
 
 let server;
 let worker;
@@ -129,10 +129,10 @@ test("lists the component catalogue", async () => {
   assert.equal(response.status, 200);
   const { components } = await response.json();
   const ids = components.map((component) => component.id);
-  assert.ok(ids.includes("animated-text"), `expected animated-text in ${ids.join(", ")}`);
+  assert.ok(ids.includes("stat-counter"), `expected stat-counter in ${ids.join(", ")}`);
 
-  const animatedText = components.find((component) => component.id === "animated-text");
-  const types = new Set(animatedText.params.map((param) => param.type));
+  const statCounter = components.find((component) => component.id === "stat-counter");
+  const types = new Set(statCounter.params.map((param) => param.type));
   for (const type of types) {
     assert.ok(
       ["text", "number", "color", "boolean", "media"].includes(type),
@@ -155,8 +155,8 @@ test("rejects props that fail the schema", async () => {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      componentId: "animated-text",
-      props: { color: "not-a-colour", durationInSeconds: 999 },
+      componentId: "stat-counter",
+      props: { accentColor: "not-a-colour", durationInSeconds: 999 },
     }),
   });
   assert.equal(response.status, 400);
@@ -165,13 +165,13 @@ test("rejects props that fail the schema", async () => {
   assert.equal(body.details.length, 2);
 });
 
-test("renders animated-text end to end and writes a non-empty file", async (t) => {
+test("renders stat-counter end to end and writes a non-empty file", async (t) => {
   const enqueue = await fetch(`${BASE}/render`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      componentId: "animated-text",
-      props: { text: TEST_TEXT, color: "#ffcc00", durationInSeconds: 1 },
+      componentId: "stat-counter",
+      props: { label: TEST_LABEL, accentColor: "#ffcc00", durationInSeconds: 2 },
     }),
   });
   assert.equal(enqueue.status, 202);
@@ -179,7 +179,7 @@ test("renders animated-text end to end and writes a non-empty file", async (t) =
   const { jobId, status, props } = await enqueue.json();
   assert.ok(jobId, "expected a jobId");
   assert.equal(status, "pending");
-  assert.equal(props.text, TEST_TEXT);
+  assert.equal(props.label, TEST_LABEL);
 
   const deadline = Date.now() + 8 * 60_000;
   let final;
