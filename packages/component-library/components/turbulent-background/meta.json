@@ -1,0 +1,85 @@
+{
+  "id": "turbulent-background",
+  "name": "Turbulent Background",
+  "description": "A still background image warped by a slowly churning turbulence field, looping seamlessly. Renders 9:16 (1080x1920) by default. Pick one of five bundled brand gradients, or set backgroundPreset to \"custom\" and pass an image URL.",
+  "project": "src/projects/turbulent-background.ts",
+  "durationParam": "durationInSeconds",
+  "defaultWidth": 1080,
+  "defaultHeight": 1920,
+  "params": [
+    {
+      "key": "backgroundPreset",
+      "label": "Background",
+      "type": "text",
+      "default": "brand-1",
+      "description": "One of the bundled gradients - brand-1 (pink to coral), brand-2 (cobalt blue), brand-3 (warm sand), brand-4 (plum to pale lilac), brand-5 (navy to mauve) - or \"custom\" to use the image parameter."
+    },
+    {
+      "key": "image",
+      "label": "Custom image URL",
+      "type": "media",
+      "default": "",
+      "description": "Only used when backgroundPreset is \"custom\", ignored otherwise. Must be a URL the renderer can fetch (http/https or data:), not a local file path - for editor media that is http://127.0.0.1:3001/media/<mediaId>. Required when the preset is \"custom\"."
+    },
+    {
+      "key": "scale",
+      "label": "Zoom",
+      "type": "number",
+      "default": 1.05,
+      "min": 1,
+      "max": 3,
+      "step": 0.05,
+      "description": "Zoom of the background within the frame. 1.0 exactly covers it; the 1.05 default leaves slack to pan on both axes."
+    },
+    {
+      "key": "offsetX",
+      "label": "Pan X",
+      "type": "number",
+      "default": 0,
+      "min": -1,
+      "max": 1,
+      "step": 0.05,
+      "description": "Horizontal pan as a fraction of half the frame width. -1 pans left, +1 right, clamped to stay inside the image."
+    },
+    {
+      "key": "offsetY",
+      "label": "Pan Y",
+      "type": "number",
+      "default": 0,
+      "min": -1,
+      "max": 1,
+      "step": 0.05,
+      "description": "Vertical pan as a fraction of half the frame height, clamped to stay inside the image."
+    },
+    {
+      "key": "displacementAmount",
+      "label": "Turbulence strength (px)",
+      "type": "number",
+      "default": 45,
+      "min": 0,
+      "max": 200,
+      "step": 5,
+      "description": "Strength of the push, as a multiplier on the noise field. Measured in frame pixels and on screen, so it looks the same at any zoom. The noise averages well below 1, so the default 45 moves pixels by roughly 2-16px; go to 100-200 for an obvious churn."
+    },
+    {
+      "key": "noiseScale",
+      "label": "Turbulence scale",
+      "type": "number",
+      "default": 2.2,
+      "min": 0.5,
+      "max": 8,
+      "step": 0.1,
+      "description": "Size of the turbulence features: low is a few broad swells, high is fine churn."
+    },
+    {
+      "key": "durationInSeconds",
+      "label": "Duration (s)",
+      "type": "number",
+      "default": 6,
+      "min": 2,
+      "max": 30,
+      "step": 0.5,
+      "description": "Loop length. The motion returns exactly to its starting state, so the clip can be looped."
+    }
+  ]
+}

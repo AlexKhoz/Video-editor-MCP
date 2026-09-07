@@ -17,6 +17,7 @@ export default defineConfig({
         "./src/projects/lower-third.ts",
         "./src/projects/logo-reveal-v2.ts",
         "./src/projects/stat-counter.ts",
+        "./src/projects/turbulent-background.ts",
       ],
       output: "./output",
     }),

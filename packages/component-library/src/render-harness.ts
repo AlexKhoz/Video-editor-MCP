@@ -26,6 +26,7 @@ import logoReveal from "./projects/logo-reveal?project";
 import logoRevealV2 from "./projects/logo-reveal-v2?project";
 import lowerThird from "./projects/lower-third?project";
 import statCounter from "./projects/stat-counter?project";
+import turbulentBackground from "./projects/turbulent-background?project";
 
 const PROJECTS: Record<string, Project> = {
   "animated-text": animatedText,
@@ -34,6 +35,7 @@ const PROJECTS: Record<string, Project> = {
   "lower-third": lowerThird,
   "logo-reveal-v2": logoRevealV2,
   "stat-counter": statCounter,
+  "turbulent-background": turbulentBackground,
 };
 
 interface RenderReport {
@@ -73,6 +75,19 @@ async function main() {
     );
   }
 
+  // Motion Canvas reports scene errors and diagnostics through its own logger, which the
+  // editor UI would display and a headless run otherwise throws away. Forwarding it to the
+  // console puts it in the render log, and keeping the error-level ones lets the failure
+  // report say what actually went wrong instead of just "no frames were written".
+  const logged: string[] = [];
+  project.logger.onLogged.subscribe((payload) => {
+    const line = [payload.level ?? "info", payload.message, payload.stack]
+      .filter(Boolean)
+      .join(" | ");
+    console.log(`[mc] ${line}`);
+    if (payload.level === "error") logged.push(payload.message ?? line);
+  });
+
   const renderer = new Renderer(project);
   let lastFrame = 0;
   renderer.onFrameChanged.subscribe((frame) => {
@@ -98,6 +113,10 @@ async function main() {
       },
     },
   });
+
+  if (logged.length > 0) {
+    throw new Error(logged.join(" | "));
+  }
 
   report({ status: "done", frames: lastFrame + 1 });
 }

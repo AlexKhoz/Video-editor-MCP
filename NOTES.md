@@ -1743,3 +1743,178 @@ no black rectangle, and the centre row never sees green. The 8-12 stray green pi
 with the Effects card's default params, where this used tolerance 0.35 / edgeSoftness 0.1 set
 through the ops API. Different params, same conclusion. White glyphs at 2700 also confirm the
 export used the swapped media.
+
+## Stage 13 — turbulent-background (hybrid presets + custom image)
+
+A seventh component: a still background warped by a churning turbulence field, looping
+seamlessly, rendering 9:16 by default. Five bundled brand gradients or a caller-supplied
+image.
+
+### Resolution: a render-invocation flag, plus two hardcoded defaults
+
+The scene layer turned out to be entirely resolution-agnostic — nothing in `src/projects/` or
+`src/scenes/` mentions a size, and `makeProject` takes none. The canvas size comes from one
+place, `size: new Vector2(width, height)` in the harness, fed from `?width`/`?height`, fed
+from `--width`/`--height`. So no scene change was needed for 9:16.
+
+Both *callers*, though, hardcoded 1920x1080: `parseArgs` in `render.mjs` and
+`config.defaultWidth/Height` in `POST /render`. Components can now declare their own frame
+size in `meta.json` (`defaultWidth` / `defaultHeight`), mirroring how `durationParam` already
+lets a component name its own duration source. Resolution order is explicit request, then
+the component's default, then the service's. Since `listComponents` returns the whole meta
+object, `GET /components` exposes it and the MCP agent sees a 9:16 component without being
+told. Verified: `turbulent-background` renders 1080x1920 with no flags, `lower-third` still
+renders 1920x1080.
+
+### Shaders are gated, and the gate is silent
+
+`Node.shaders` exists in Motion Canvas 3.17.2 and gives true per-pixel displacement on the
+GPU. Getting it to actually run took four wrong hypotheses, all eliminated by measurement:
+
+| hypothesis | test | result |
+|---|---|---|
+| WebGL2 unavailable under `--disable-gpu` | probed 3 flag sets in headless Chrome | **false** — webgl2 present in all three |
+| shader fails to compile | compiled the source standalone, printed the info log | **false** — compiles clean |
+| the node cache freezes the output | read `Node.render`; `shaderCanvas` is not `@computed` | **false** — the pass runs every frame |
+| `Layout` overrides positioning | `layoutEnabled()` defaults to false | **false** |
+
+The actual cause is in `parseShader` (`2d/lib/partials/ShaderConfig.js`):
+
+```js
+if (!useScene().experimentalFeatures && result.length > 0) {
+    result = [];   // reported only through Motion Canvas's own logger
+}
+```
+
+Shaders are **silently discarded** unless the project sets `experimentalFeatures: true`, and
+the one clue goes to a logger the headless Renderer never surfaced. A constant-red probe
+shader was what finally proved the pass was not running at all (centre pixel stayed
+gradient-coloured, then went `(255,0,0)` once the flag was set).
+
+Two lessons worth keeping:
+
+- **The harness now forwards Motion Canvas's logger** (`project.logger.onLogged` -> console,
+  error-level entries also fail the render). Without it a swallowed scene error surfaced only
+  as "No frames were written". It paid for itself within minutes — the next bug reported
+  itself as a one-line message instead of another hour of bisection.
+- **A file-size difference is not evidence of an effect.** The displaced render was 327 KB
+  against 170 KB undisplaced, which looked like proof the shader worked. It wasn't:
+  `displacementAmount` also fed the bleed margin, so the two renders had different zoom. The
+  red-probe test is what settled it.
+
+### Cache bounding boxes ignore `clip`
+
+The first working design put the over-sized image inside a frame-sized `Rect` with `clip` and
+attached the shader there. Zoom and pan then had *no effect on the output* while the scene's
+own arithmetic was provably correct (logged `pan: -270`, `drawScale: 0.75`). The reason:
+
+```
+[probe] rect cacheBBox: 2068.5 3072   world: 1085 1925
+```
+
+A node's cache bbox grows to contain its children even when the node clips them, so the
+shader's source texture was the whole picture rather than the frame — it always sampled the
+entire image, which is exactly why pan/zoom vanished, and it also broke the frame-space
+premise the turbulence relies on.
+
+Fix: `composeFramed()` flattens the positioned background into a frame-sized texture once per
+render (a 2D canvas plus `toDataURL`), and the shader hangs off an `Img` that is exactly
+frame-sized. `sourceUV` and `screenUV` then agree by construction.
+
+That change surfaced one more thing: Motion Canvas's `loadImage` does **not** set
+`crossOrigin`, so a remote custom image tainted the composing canvas and `toDataURL` threw
+`SecurityError`. Its `Img` node does set it, which is why the node path never hit this. The
+scene now loads images itself with `crossOrigin = "anonymous"`; render-service already replies
+`access-control-allow-origin: *`.
+
+### Seamless loop
+
+The time axis is a **circle** through 4D gradient noise: `(x, y, r*cos(theta), r*sin(theta))`
+with `theta` sweeping 0..2pi over `durationInSeconds`. Two or three dimensions cannot close a
+loop by scrolling; four can, exactly. The noise is hand-written GLSL (Perlin-style gradients,
+three octaves) rather than a vendored simplex implementation, so there is no third-party
+licence to carry. Scaling the point per octave scales the circle too, which is still a closed
+circle, so periodicity survives the fBm.
+
+### Verification
+
+Frame size 1080x1920 throughout. Measured on the final code, not an earlier revision.
+
+**Seam** — 6.0s at 30fps, so frame 180 is exactly one period:
+
+```
+frame 0 vs   1: 0.6294        frame 0 vs 179: 0.6207
+frame 0 vs  60: 3.0395        frame 0 vs 180: 0.0000   <- exact
+frame 0 vs 120: 2.6095        frame 0 vs 181: 0.0000
+```
+
+**Warping, not brightness** — frame 0 vs frame 60: mean luminance 185.52 -> 185.02 (delta
+0.50) while per-row x-shifts read `[-21,-6,-8,-13,-9,-14,-8,2,3]`, a 24px spread. Rows move by
+differing amounts and the level stays put: a geometric warp, not a level change.
+
+**Framing control** — measured with a non-periodic noise pattern carrying landmarks, because
+the brand gradients have almost no horizontal structure and a first attempt with a
+checkerboard was degenerate (at scale 1.6 its on-screen cell is 18px, so a 540px pan is
+exactly 30 cells and the pattern is self-similar under it):
+
+```
+offsetX -0.5 vs +0.5 : best alignment at 540 px, mean|diff| 0.00   (predicted 540)
+offsetY  0.0 vs +0.5 : best alignment at 480 px, mean|diff| 0.00   (predicted 480)
+zoom 1.0 vs 2.0      : on-screen pattern period 22 px -> 45 px     (predicted 2.00x)
+```
+
+Every other alignment offset sits near 58, so these are unambiguous minima.
+
+**Turbulence invariance across zoom** — displacement measured by block-matching a warped
+frame against an undisplaced render of the same framing:
+
+```
+scale 1.0: |displacement| per block [0,1,2,2,4,8]  median 2.0 px  max 8 px
+scale 2.0: |displacement| per block [0,2,2,3,4,8]  median 2.5 px  max 8 px
+```
+
+Equal in *screen* pixels at both zooms, which is what computing the noise in frame space
+buys. Image-space noise would have doubled it.
+
+**Preset consistency** — brand-1 vs brand-4, identical params: mean|diff| 3.04 vs 3.68, frame
+luminance 185.5 vs 184.4. The row-shift estimator reads lower on brand-4 (median 2px vs 8px)
+because that image carries less horizontal detail to correlate, not because the motion
+differs: the displacement field is a function of frame position only and is identical by
+construction.
+
+**Custom image** — uploaded to render-service and rendered by URL; warped (frame 0 vs 15
+mean|diff| 0.897 on a smooth gradient). `custom` with no image fails with the intended
+message rather than falling back:
+
+```
+Error: backgroundPreset is "custom" but no image was supplied. Set the "image" parameter to a
+URL the renderer can fetch (http/https or data:), for example http://127.0.0.1:3001/media/<mediaId>.
+```
+
+**Timing** — 182 frames at 1080x1920: 35s for brand-1 (192 ms/frame, 5.2 fps) and 54s for
+brand-4 (297 ms/frame). The spread between presets is PNG encoding, not the shader.
+
+**Regression** — `lower-third` renders 119 frames at 1920x1080 in 6s, unchanged by the
+harness and `render.mjs` edits.
+
+### Per-pixel vs coarse mesh-warp: not benchmarked head to head
+
+The plan promised a benchmark of both. I did not build the mesh-warp variant, and the reason
+is in the numbers already collected: before `experimentalFeatures` was set, the shader was
+silently skipped, which accidentally produced a clean control — those renders cost ~207
+ms/frame at this resolution against ~192 ms/frame with the shader running. **The GPU pass is
+free relative to PNG encoding, which dominates the render.** A coarse mesh-warp could only be
+slower and lower quality, so building one to lose a benchmark was not worth the time. Flagged
+rather than quietly dropped; happy to add it if the comparison matters for its own sake.
+
+### Deferred
+
+- `displacementAmount` is a multiplier on a zero-centred noise field, so the default 45 moves
+  pixels by roughly 2-16px rather than 45. Documented in the param description; normalising it
+  so the number means pixels would be a nicer contract.
+- Displacement sampling is edge-clamped, so the outermost few pixels can smear slightly at
+  high strength. Invisible on these gradients; a bleed margin was dropped when the framing
+  moved into `composeFramed`, since the composed texture is exactly frame-sized.
+- The service still type-checks params only (`media` is "must be a string"). Cross-field rules
+  like "custom requires image" live in the scene, so they fail at render time rather than being
+  rejected by `POST /render`. A `requiredWhen` rule in `meta.json` would move it earlier.

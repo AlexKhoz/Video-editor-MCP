@@ -98,8 +98,10 @@ app.post("/render", async (request, reply) => {
     componentId,
     props,
     fps: Number(fps) || config.defaultFps,
-    width: Number(width) || config.defaultWidth,
-    height: Number(height) || config.defaultHeight,
+    // A component may declare its own frame size in meta.json (turbulent-background is
+    // 9:16), so an explicit request wins, then the component's default, then the service's.
+    width: Number(width) || Number(meta.defaultWidth) || config.defaultWidth,
+    height: Number(height) || Number(meta.defaultHeight) || config.defaultHeight,
     durationInSeconds: resolveDuration(meta, props),
     background: background ?? null,
   });

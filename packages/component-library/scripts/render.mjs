@@ -38,7 +38,7 @@ const CHROME_CANDIDATES = [
 ].filter(Boolean);
 
 function parseArgs(argv) {
-  const args = { fps: 30, width: 1920, height: 1080, keepFrames: false };
+  const args = { fps: 30, keepFrames: false };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     const value = argv[i + 1];
@@ -86,6 +86,23 @@ function parseArgs(argv) {
   return args;
 }
 
+/**
+ * A component may declare its own frame size in meta.json — turbulent-background renders
+ * 9:16. Explicit --width/--height still win; this only fills in what was not passed.
+ */
+async function componentDefaults(component) {
+  const metaPath = path.join(ROOT, "components", component, "meta.json");
+  try {
+    const meta = JSON.parse(await fs.readFile(metaPath, "utf8"));
+    return {
+      width: Number(meta.defaultWidth) || null,
+      height: Number(meta.defaultHeight) || null,
+    };
+  } catch {
+    return { width: null, height: null };
+  }
+}
+
 async function findChrome() {
   for (const candidate of CHROME_CANDIDATES) {
     try {
@@ -131,7 +148,11 @@ async function renderFrames({ component, props, fps, width, height, background }
     const page = await browser.newPage();
     page.on("pageerror", (error) => console.error("[page error]", error.message));
     page.on("console", (message) => {
-      if (message.type() === "error") console.error("[page console]", message.text());
+      const text = message.text();
+      // Errors always; Motion Canvas's own diagnostics (forwarded by the harness as "[mc]")
+      // because a swallowed scene error otherwise shows up only as "no frames were written".
+      if (message.type() === "error") console.error("[page console]", text);
+      else if (text.startsWith("[mc]")) console.log(text);
     });
 
     console.log(`[render] ${component} -> ${url.href}`);
@@ -221,6 +242,12 @@ async function encodeWebm({ framesDir, fps, out, background }) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const out = path.resolve(process.cwd(), args.out);
+
+  // Frame size: explicit flags, else the component's own default, else 16:9.
+  const defaults = await componentDefaults(args.component);
+  args.width = args.width || defaults.width || 1920;
+  args.height = args.height || defaults.height || 1080;
+  console.log(`[render] frame ${args.width}x${args.height} @ ${args.fps}fps`);
 
   const { framesDir, frameCount } = await renderFrames(args);
   await encodeWebm({ framesDir, fps: args.fps, out, background: args.background });
