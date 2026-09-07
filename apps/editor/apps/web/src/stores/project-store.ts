@@ -2985,6 +2985,7 @@ export const useProjectStore = create<ProjectState>()(
       },
 
       recoverFromAutoSave: async (saveId: string) => {
+        const previousProject = get().project;
         const recoveredProject = await autoSaveManager.recover(saveId);
         if (recoveredProject) {
           const storedMedia = await loadProjectMedia(recoveredProject.id);
@@ -3049,6 +3050,14 @@ export const useProjectStore = create<ProjectState>()(
             templateRedoStack: [],
             error: null,
           });
+
+          // Recovery is a project load like any other, and the preview reads a clip's
+          // effects from the effects bridge rather than from the clip (see
+          // canvas-renderers.ts applyEffectsToFrame). Without this the bridge keeps whatever
+          // the previous project put there - nothing, on a fresh page - so every effect
+          // stored on a recovered clip is missing from the preview until it is re-applied
+          // by hand. `loadProject` has always done this; recovery never did.
+          syncProjectEffectsBridge(projectWithMedia, previousProject);
 
           await projectManager.addToRecent(projectWithMedia);
           return true;
