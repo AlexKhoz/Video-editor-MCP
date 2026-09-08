@@ -972,7 +972,14 @@ export class MediaBunnyEngine {
         throw new Error("Cannot decode video track");
       }
 
-      const sinkOptions: Record<string, unknown> = { poolSize: 1 };
+      // alpha, for the same reason as ExportFrameDecoder: CanvasSink defaults to an opaque
+      // canvas, so a transparent (VP9 alpha_mode=1) clip comes back with black baked into
+      // every transparent pixel. This is the frame source `renderFrame` falls back to when
+      // no ExportFrameDecoder has been primed — which is exactly what render_preview_frame
+      // does — so without it the whole clip is opaque and, on the top track, paints over
+      // every track below instead of compositing. Stage 7 fixed the export's decoder and
+      // this call site was missed; see Stage 20 in NOTES.md.
+      const sinkOptions: Record<string, unknown> = { poolSize: 1, alpha: true };
       if (width) {
         const aspectRatio = videoTrack.displayHeight / videoTrack.displayWidth;
         sinkOptions.width = width;

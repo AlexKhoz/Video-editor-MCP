@@ -2702,3 +2702,133 @@ setting, a component bug, a conversion bug.
 
 **When a new preview/export discrepancy appears, check for a decode-path split before
 anything else.**
+
+## Stage 20 — `render_preview_frame` painted over the footage: `CanvasSink` without `alpha: true`, again
+
+An MCP agent doing real work found that `render_preview_frame` returned a black frame for a
+transparent component, and worked around it by re-baking the component on a solid background.
+Functional, but every future agent would hit the same wall, so it was worth chasing.
+
+### The reported cause was a red herring
+
+The agent pinned `video-engine.ts:684`, where the canvas is filled black before the clip loop.
+That fill is legitimate — "canvas background fill behind letterboxed clips… drawn before the
+clip loop so contained clips composite on top" — and **`export_project` runs through the very
+same `renderFrame` and the same fill**, correctly. It is what you see, not what causes it.
+
+Nor was the symptom what it looked like. At t=2 the preview showed the lower-third's plate,
+glyphs and accent bar all correctly alpha-composited, while the **footage track was entirely
+absent**: 99.2% of the frame black. The component's transparency was not "lost inside a black
+rectangle" — its whole 1920x1080 bitmap came back **opaque**, and being on the top track it
+painted over everything below.
+
+### Root cause
+
+`MediaBunnyEngine.getFrameAtTime` built `sinkOptions = { poolSize: 1 }` — no `alpha: true`.
+`CanvasSink` defaults to an opaque canvas, so a VP9 `alpha_mode=1` clip decodes with black
+baked into every transparent pixel. Measured on one blob at one timestamp:
+
+| branch | transparent | partial | opaque | pixel at (100,100) |
+|---|---|---|---|---|
+| fallback `getFrameAtTime` | 0 | 0 | **2,073,600** | `[0,0,0,255]` |
+| `ExportFrameDecoder` (`alpha: true`) | 1,937,843 | 129,882 | 5,875 | `[0,0,0,0]` |
+
+The right-hand row is ffmpeg's ground truth exactly.
+
+**Why only the preview broke:** `renderFrame` prefers `getExportDecoder(mediaId)` and falls back
+to `getFrameAtTime`. The export primes `createExportDecoder` for every video item before its
+loop; `render_preview_frame` primes nothing. One shared function, two branches — and the
+fallback branch never received Stage 7's fix.
+
+So this is **not** another preview/export decode-path *split* like Stages 7/17/19. It is the
+same *bug family* (a `CanvasSink` missing `alpha: true`) at the one call site Stage 7 missed.
+
+### Four hypotheses falsified before getting there
+
+Recorded because each looked plausible and cost time:
+
+| hypothesis | how it died |
+|---|---|
+| the footage's blob never hydrated | both hydrate — 389,839 and 68,312 bytes, neither a placeholder |
+| the footage fails to decode | both return 1920x1080 through the fallback |
+| a cold-start race, one frame rendered too early | three consecutive calls byte-identical |
+| track hidden / not visual | `hidden: false` both, render order `["Video 2","Video 1"]`, `visual: true`, opacity 1, scale 1, no effects |
+
+Only then did reading the *alpha channel* of the decoded bitmaps — rather than the composited
+result — separate "opaque bitmap" from "lost transparency".
+
+### The fix, and the guard
+
+One line: `alpha: true` in `getFrameAtTime`'s sink options. Two callers, both of which want it:
+`video-engine.ts:337` (the `renderFrame` fallback) and `exportFrame()` (single-frame image
+export). `generateThumbnails`, `generateFilmstripThumbnails` and `exportImageSequence` build
+their own sinks and are deliberately left opaque — they produce standalone images, not layers.
+
+Because this is the **fourth** appearance of the same class, it is now closed structurally
+rather than by vigilance. `src/media/canvas-sink-alpha.test.ts` reads the source and asserts
+every `CanvasSink` construction either passes `alpha: true` or is named in a
+`DELIBERATELY_OPAQUE` map with a reason. A new, unclassified call site fails until someone
+decides which it is, and a stale exemption fails too. Mutation-tested four ways — removing
+`alpha: true` from `getFrameAtTime` (the Stage 20 bug), removing it from `ExportFrameDecoder`
+(the Stage 7 bug), adding a fresh unclassified site (a hypothetical fifth), and renaming an
+exempted method — each fails the matching assertion, and the suite is green when restored.
+
+### Verification
+
+**1. `render_preview_frame`, same project, t=2.**
+
+| | near-black | white glyphs | row 100 (pure footage) |
+|---|---|---|---|
+| before | 2,057,921 / 2,073,600 (99.2%) | 8,417 | `(0,0,0) (0,0,0) (0,0,0)` |
+| **after** | **294 / 2,073,600 (0.0%)** | 8,417 | `(254,159,14) (35,71,167) (25,67,174)` |
+
+Visually indistinguishable from the export. `getFrameAtTime` itself now returns
+transparent 1,939,887 / partial 121,062 / opaque 12,651 with `[0,0,0,0]` at (100,100), against
+ffmpeg's 1,937,843 / 129,882 / 5,875 — the right shape, with a residue noted below.
+
+**2. Export regression — and the export was quietly affected too.** The chroma path is
+byte-identical to Stage 12 (white glyphs 10,655 / 10,658, green 0, black 0). The true-alpha
+path *changed*: near-black at t=2/3 went 782/1,576 to **6/0**, with the difference confined to
+the component's own footprint (y 763-919, x 488-1409) and the rest of the frame identical.
+Judged against the ideal composite — ffmpeg's faithful component over the real footage — on the
+129,882 partially-transparent pixels:
+
+| | MAE vs ideal |
+|---|---|
+| before (`29.mp4`) | 6.225 |
+| **after (`38.mp4`)** | **2.474** |
+
+So the export is **2.5x more correct**, not regressed: it was intermittently falling through to
+`getFrameAtTime` as well (a primed `ExportFrameDecoder` returns null on some frames, and the
+chain then retries through the fallback), baking black into the component's semi-transparent
+edges. This is why "the export looks fine" was never quite the whole story.
+
+**3. Live preview, both mechanisms.** `decodeClipFrame` (`Preview.tsx:2347`) decodes through
+`document.createElement("video")` + `currentTime` and never reaches `getFrameAtTime` — untouched
+by construction, which is what Stage 7 established. The **bridge path**
+(`Preview.tsx:2615` to `render-bridge.ts:178`) calls `videoEngine.renderFrame`, the same
+function verified in item 1, so **it improves too**. Verified structurally, not by pixels: two
+attempts to drive the live preview headlessly measured nothing usable, because a dynamic
+`import()` of the store or the bridge resolves to a *different module instance* than the running
+app's, and the first `<canvas>` in the DOM is not the bound preview surface. Worth knowing
+before anyone tries to test the live UI this way again.
+
+**4. Suites.** core typecheck clean; core `media`/`video`/`export` 185 passed, 5 skipped;
+render-service 13/13; project-kit 27/27; mcp-server 8/8.
+
+### Residue, deliberately not fixed here
+
+`getFrameAtTime` now returns *correct* transparency but not *maximally faithful* transparency:
+121,062 partial pixels against ffmpeg's 129,882, with the surplus pushed to hard 0/255 — the
+exact signature of the Stage 19 mechanism (Chrome's WebCodecs VP9-alpha decode collapsing
+antialiased alpha). Stage 19's parallel-decoder repair lives in `ExportFrameDecoder` only.
+Porting it to this path is a separate, smaller decision: it affects preview fidelity, not
+correctness, and the black-rectangle bug is what was in scope.
+
+### The pattern, for the fifth time it happens
+
+`CanvasSink` defaults to an opaque canvas. **Any** sink whose output gets composited over
+another track must pass `alpha: true`, or transparency becomes black and — on a top track —
+erases everything below. Stage 7 (export decode), Stage 19 (alpha fidelity in that decoder),
+Stage 20 (the `renderFrame` fallback). The guard test now enforces it; if it ever fails, the
+answer is in this section rather than a fresh investigation.
