@@ -6,6 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+import { withMcpProjectSuffix } from "./naming.js";
 import { SERVICE_URL, service } from "./service.js";
 
 /**
@@ -282,9 +283,17 @@ server.registerTool(
     description:
       "Creates and saves an empty project with one video track, returning its projectId and " +
       "that track's trackId — you need the trackId for add_clip and add_text_clip. Defaults " +
-      "to 1920x1080 at 30fps.",
+      "to 1920x1080 at 30fps. Pass a short, descriptive summary of the task as the name; " +
+      'a "-MCP" suffix is appended automatically to mark the project as agent-created, so ' +
+      "do not add it yourself.",
     inputSchema: {
-      name: z.string().optional().describe('Project name, e.g. "Launch teaser".'),
+      name: z
+        .string()
+        .optional()
+        .describe(
+          'A short, descriptive summary of the task, e.g. "Q4 product launch teaser". ' +
+            'The "-MCP" suffix is added for you.',
+        ),
       width: z.number().int().positive().optional().describe("Canvas width in pixels (default 1920)."),
       height: z.number().int().positive().optional().describe("Canvas height in pixels (default 1080)."),
       frameRate: z.number().positive().optional().describe("Frames per second (default 30)."),
@@ -292,7 +301,13 @@ server.registerTool(
   },
   async ({ name, width, height, frameRate }) => {
     try {
-      const created = await service.createProject({ name, width, height, frameRate });
+      // Applied here rather than trusted to the caller: see naming.js for why.
+      const created = await service.createProject({
+        name: withMcpProjectSuffix(name),
+        width,
+        height,
+        frameRate,
+      });
       const tracks = created.project.timeline.tracks.map((track) => ({ trackId: track.id, name: track.name }));
       return ok(`Created project "${created.name}" (${created.id}).`, {
         projectId: created.id,

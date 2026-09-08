@@ -16,6 +16,15 @@ Standing rules that apply to future work, kept here so they survive between sess
   a mismatch, so a rename means moving the directory too. By convention the project and scene
   filenames match as well (`src/projects/<id>.ts`, `src/scenes/<id>.tsx`), and `meta.json`'s
   `project` field is what actually resolves the path.
+- **Projects created through the MCP server get a `-MCP` suffix, enforced server-side.**
+  `create_project` appends it in `apps/mcp-server/src/naming.js` before forwarding to the API,
+  so every agent-created project is identifiable in the project list whether or not the calling
+  agent knows the rule. An already-suffixed name is not doubled (case-insensitively, and the
+  suffix is normalised to `-MCP`), and a missing name becomes `Untitled-MCP` rather than
+  project-kit's bare `Untitled`. The render-service API is deliberately left alone — a project
+  saved from the editor UI carries no suffix, which is the point. Enforced rather than
+  documented because this session lost three agent-side conventions that way (the `-Rep`
+  suffix, a shared-assets request, a five-component deletion).
 - **Adding or renaming a component touches four places**: `components/<id>/meta.json`,
   `src/projects/<id>.ts`, `src/scenes/<id>.tsx`, plus registration in *both*
   `src/render-harness.ts` (import + `PROJECTS` key, which is the id used by the API and CLI)

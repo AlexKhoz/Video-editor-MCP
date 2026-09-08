@@ -88,7 +88,7 @@ protocol channel, and one stray `console.log` there corrupts the session.
 | `generate_component` | Renders one component to a transparent-background WebM. **Blocks** until the render finishes (20–60s); optionally downloads it locally. |
 | `upload_media` | Uploads a local video/audio/image to the server store and probes it with ffprobe. Returns `mediaId` + `metadata` for the `add_media` op. |
 | `list_projects` | Saved projects, newest first. |
-| `create_project` | Creates an empty project with one video track; returns `projectId` and that `trackId`. |
+| `create_project` | Creates an empty project with one video track; returns `projectId` and that `trackId`. Appends a **`-MCP`** suffix to the name (not doubled if already present) so agent-created projects are identifiable in the list. |
 | `load_project` | Current state: tracks, clips (ids, times, effects), text clips, media library, timeline duration. `includeRaw` for the full JSON. |
 | `apply_project_ops` | The main editing tool. Applies a list of ops **atomically**; its description carries the whole op vocabulary. |
 | `export_project` | Renders the project to MP4 in a headless browser. **Blocks** until done; optionally downloads it. |
