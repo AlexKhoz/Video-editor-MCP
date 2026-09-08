@@ -144,8 +144,8 @@ headless exports.
 claude mcp add video-editor --scope user -- node E:/Replika/Tools/video-editor/apps/mcp-server/src/index.js
 ```
 
-Nine tools — render a component, upload footage, create a project, edit the timeline, export an MP4 —
-all over the render-service HTTP API. Tool list, `claude_desktop_config.json` snippet and the
+Ten tools — render a component, upload footage, create a project, edit the timeline, sample a
+preview frame, export an MP4 — all over the render-service HTTP API. Tool list, `claude_desktop_config.json` snippet and the
 concurrency story: [apps/mcp-server/README.md](apps/mcp-server/README.md).
 
 ## The end-to-end flow

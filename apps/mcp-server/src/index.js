@@ -164,7 +164,11 @@ server.registerTool(
       props: z
         .record(z.union([z.string(), z.number(), z.boolean()]))
         .optional()
-        .describe('Component parameters, e.g. { "title": "Jane Doe", "durationInSeconds": 4 }.'),
+        .describe(
+          "Component parameters, keyed exactly as in that component's own schema from " +
+            "list_components; anything omitted uses its default. Example for " +
+            'orbit-headline-Rep: { "text": "Your headline", "durationInSeconds": 4 }.',
+        ),
       background: z
         .string()
         .regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/)
