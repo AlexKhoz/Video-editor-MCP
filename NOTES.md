@@ -2567,3 +2567,138 @@ Two details that cost measurement time and would bite an implementation:
 
 So Option 1 stays rejected and Option 4 is not needed: the fix does not have to trade
 fidelity against judder. What it costs is a second VP9 decode per exported frame.
+
+### Option 2 implemented: alpha repair in ExportFrameDecoder
+
+`ExportFrameDecoder` now keeps taking colour *and frame selection* from `CanvasSink`, and
+overwrites only the alpha channel from a second `VideoDecoder` driven over the alpha side
+data. One file, 278 added lines, nothing else touched.
+
+Armed only when it can help and can be trusted: the track must expose alpha side data
+(opaque clips pay nothing and change not at all) and the canvas must be 1:1 with the source.
+A scaled or letterboxed canvas - a 9:16 component in a 16:9 project - would need the alpha
+plane resampled through CanvasSink's own `fit` geometry, and getting that subtly wrong is
+worse than not repairing, so it is skipped. Any failure disarms repair for the rest of the
+export rather than failing the export.
+
+Frames are matched on **the canvas frame's own timestamp**, not on the requested time, so
+the "last frame at or before" rule stays in exactly one place and the two streams cannot
+drift apart.
+
+#### Two implementation bugs, both caught by instrumenting rather than guessing
+
+1. **Premature EOF in the pump.** The first version fed 8 packets per pump and treated "all
+   packets fed" as "stream finished". The consumer discards frames before the one it wants,
+   so the queue empties transiently - and the loop concluded the stream was over while the
+   wanted frame was still in flight, having already discarded it. Symptom: repair armed,
+   `matched: 0`, output byte-identical to before. Input is now fed only while decoded frames
+   are outstanding (bounded by `MAX_IN_FLIGHT`), and the loop waits for output instead of
+   concluding.
+2. **Per-batch flush is invalid.** The second version forced output with `flush()` after each
+   batch, and a code comment asserted that flush does not require a key packet afterwards.
+   Chrome disagreed, in as many words: `DataError: Failed to execute 'decode' on
+   'VideoDecoder': A key frame is required after configure() or flush().` `flush()` is now
+   used exactly once, at end of input, where nothing follows it. `reset()` + `configure()` on
+   a backwards seek is fine because the seek lands on a key packet by construction.
+
+#### Gate results
+
+Gates 1-4 were run against the real `ExportFrameDecoder`, imported into a page on the editor's
+own dev server through Vite's `/@fs/` endpoint, rather than against a re-implementation.
+
+**Gate 1 - edge fidelity at the pinned probe.**
+
+| | ripple | MAE vs ideal |
+|---|---|---|
+| ideal | 0.000 | 0.000 |
+| CanvasSink (before) | 2.016 | **2.357** |
+| **with repair** | 6.080 | **0.692** |
+| ffmpeg's own floor | 5.901 | 0.446 |
+
+MAE **2.357 -> 0.692**, 3.4x, against ffmpeg's floor of 0.446. The probe row is now
+byte-identical to ffmpeg. Ripple *rising* to 6.080 is correct rather than a regression:
+CanvasSink's low 2.016 came from having flattened the edge to hard 0/255, and 6.080 is
+ffmpeg's 5.901 - the right amount of variation for a real compressed edge. Reading ripple
+alone would have called this a regression, which is why Stage 19 added the MAE metric.
+
+The residual 0.25 above ffmpeg is the **colour** channel, deliberately left alone: Chrome
+zeroes colour where its own alpha was zero, and only alpha is restored. Visible only for a
+bright glyph on a dark background.
+
+**Gate 2 - whole-frame antialiased-contour count, exact on all five frames.**
+
+| frame | with repair | ffmpeg | CanvasSink (before) |
+|---|---|---|---|
+| 20 | **18,966** | 18,966 | 6,816 |
+| 45 | **26,307** | 26,307 | 8,373 |
+| 70 | **26,934** | 26,934 | 10,024 |
+| 80 | **26,544** | 26,544 | 8,846 |
+| 89 | **33,399** | 33,399 | 10,381 |
+
+**Gate 3 - frame selection, the hard blocker.** The Stage 17 probe (`idx.webm`) is `yuv420p`,
+so it only exercises the disarmed path. A second probe codes the frame index into *both*
+streams - colour in an opaque half, where readback is exact, and alpha in two patches, where
+it is exact whatever its value - so a colour/alpha misalignment shows as a mismatch instead
+of having to be inferred. (A first attempt read colour through a partial alpha; unpremultiplied
+readback at alpha 159 destroyed the 16-level nibble margin and the probe reported failures of
+its own making.)
+
+```
+idx.webm  (opaque, repair disarmed)  169/169 clean +1 steps, first frame index 0
+idxa.webm (alpha,  repair armed)     169/169 clean +1 steps, first frame index 0
+                                     alpha index == colour index: 170/170
+```
+
+**Gate 4 - Stage 12 regressions, at decoder level.** `green-lt.webm` carries no `alpha_mode`,
+so the chroma path leaves repair disarmed and is unaffected by construction.
+
+| clip | metric | decoder | ffmpeg |
+|---|---|---|---|
+| green-lt (disarmed) | green px @ t=2 | 1,939,924 | 1,939,924 |
+| green-lt | white glyphs | 10,395 | 10,367 |
+| alpha-lt (armed) | alpha 0 / partial / 255 | 1,937,843 / **129,882** / 5,875 | 1,937,843 / **129,882** / 5,875 |
+| alpha-lt | green px | 0 | 0 |
+
+The alpha histogram matches ffmpeg bucket for bucket. The 0.1-0.3% glyph-count differences
+are canvas-versus-PNG rounding in the colour conversion.
+
+**Gate 5 - wall clock.** Measured on the decode stage specifically; end-to-end export time is
+dominated by encoding and headless-Chrome startup and would bury the change.
+
+```
+92 sequential getFrame() calls, alternated, 3 passes each
+  repair OFF: 4276, 5402, 5330 ms   mean 5003
+  repair ON : 6586, 6541, 6624 ms   mean 6584
+  overhead: 1581 ms total, 17.19 ms/frame, 32% slower on the decode
+```
+
+**+17.19 ms/frame, +32% on the decode**, which is +1.6s on a 92-frame clip - roughly
+**+12-16% end-to-end** against the 10-13s exports, and **zero for opaque clips**. Accepted:
+a 3.4x fidelity gain for ~15% on alpha clips only.
+
+#### Open item (not urgent)
+
+The **end-to-end** halves of gates 4 and 5 are unrun: Docker would not start, so the export
+queue was unavailable. Docker Desktop's own dialog, from its log:
+
+> `starting services: initializing Inference manager: listening on
+> unix://<HOME>\AppData\Local\Docker\run\dockerInference: remove ...dockerInference: The file
+> cannot be accessed by the system.`
+
+Not a disk or WSL problem - H: had 341 GB free, `H:\Docker Disk\DockerDesktopWSL` existed and
+`wsl -d docker-desktop echo ok` worked. Two orphaned entries in `%LOCALAPPDATA%\Docker\run\`
+(`dockerInference`, `userAnalyticsOtlpHttp.sock`) cannot be stat'd, bound or removed. A reboot
+cleared the same failure earlier in this session. **To do next time the stack is up: run the
+full export regression once, as a close-the-loop check on the whole pipeline together.** The
+decoder-level evidence above is not in doubt; this is belt and braces on core export code.
+
+### The pattern behind Stages 17-19
+
+All three traced to one theme: **preview and export do not share a decode path.** Preview
+draws alpha clips from an `HTMLVideoElement` (`video-engine.ts:479`); export goes through
+mediabunny's `CanvasSink`. Stage 7's alpha bug, Stage 17's judder and Stage 19's ripple are
+the same split showing up three times, and each looked like something else first - an encoder
+setting, a component bug, a conversion bug.
+
+**When a new preview/export discrepancy appears, check for a decode-path split before
+anything else.**

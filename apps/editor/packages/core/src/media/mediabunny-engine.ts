@@ -57,6 +57,24 @@ export function inferMediaType(
   if (SUPPORTED_IMAGE_FORMATS.includes(baseMimeType)) return "image";
   return null;
 }
+/**
+ * Minimal shapes for the packet-level API used by the export decoder's alpha repair.
+ *
+ * Declared locally rather than imported so that a mediabunny build (or a test double)
+ * without `EncodedPacketSink` degrades to "no repair" instead of failing to construct.
+ */
+type AlphaPacket = {
+  timestamp: number;
+  sideData?: { alpha?: Uint8Array; alphaByteLength?: number };
+  alphaToEncodedVideoChunk(): EncodedVideoChunk;
+};
+
+type AlphaPacketSink = {
+  getFirstPacket(): Promise<AlphaPacket | null>;
+  getKeyPacket(timestamp: number): Promise<AlphaPacket | null>;
+  getNextPacket(packet: AlphaPacket): Promise<AlphaPacket | null>;
+};
+
 type MediaBunnyInput = {
   computeDuration(): Promise<number>;
   getMimeType(): Promise<string>;
@@ -81,6 +99,19 @@ export class ExportFrameDecoder {
   private nextFrame: WrappedCanvas | null = null;
   private iteratorDone = false;
   private decodeTail: Promise<void> = Promise.resolve();
+
+  // Alpha repair (see setupAlphaRepair). All null/false unless the track actually carries
+  // alpha side data and the canvas geometry matches the source 1:1.
+  private alphaPacketSink: AlphaPacketSink | null = null;
+  private alphaDecoderConfig: VideoDecoderConfig | null = null;
+  private alphaDecoder: VideoDecoder | null = null;
+  private alphaNextPacket: AlphaPacket | null = null;
+  private alphaFrames: VideoFrame[] = [];
+  private alphaInFlight = 0;
+  private alphaOutputWaiter: (() => void) | null = null;
+  private alphaEndFlushed = false;
+  private alphaBuffer: Uint8Array | null = null;
+  private alphaFailed = false;
 
   constructor(mediabunny: typeof import("mediabunny"), file: File | Blob, width?: number) {
     this.mediabunny = mediabunny;
@@ -122,8 +153,66 @@ export class ExportFrameDecoder {
     }
 
     this.sink = new CanvasSink(videoTrack, sinkOptions);
+    await this.setupAlphaRepair(videoTrack, sinkOptions);
     this.initialized = true;
     return true;
+  }
+
+  /**
+   * Arms alpha repair, if this track can benefit from it.
+   *
+   * CanvasSink's frames come back as packed BGRA from Chrome's WebCodecs VP9-alpha decode,
+   * which collapses antialiased contour pixels: on a stem edge the renderer drew
+   * `0, 12, 192, 255`, the canvas reads `0, 0, 206, 255`, and across five frames only
+   * 31-37% of the partially-transparent pixels survive. VP9 stores alpha as its own
+   * greyscale stream, though, and decoding *that* through its own VideoDecoder returns
+   * planar I420 whose Y plane is bit-exact with ffmpeg (0 of 2,073,600 pixels differ). So
+   * the colour and the frame selection keep coming from CanvasSink, and only the alpha
+   * channel is overwritten afterwards. See Stage 19 in NOTES.md.
+   *
+   * Bails out - leaving behaviour exactly as before - when anything is missing or when the
+   * canvas is not 1:1 with the source, because a scaled or letterboxed canvas would need the
+   * alpha plane resampled through CanvasSink's own `fit` geometry, and getting that subtly
+   * wrong is worse than not repairing.
+   */
+  private async setupAlphaRepair(
+    videoTrack: InputVideoTrack,
+    sinkOptions: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const EncodedPacketSink = (
+        this.mediabunny as unknown as {
+          EncodedPacketSink?: new (track: InputVideoTrack) => AlphaPacketSink;
+        }
+      ).EncodedPacketSink;
+      if (!EncodedPacketSink || typeof VideoDecoder === "undefined") return;
+
+      // The canvas CanvasSink will hand back, versus the source's own pixels.
+      const canvasWidth = (sinkOptions.width as number | undefined) ?? videoTrack.displayWidth;
+      const canvasHeight = (sinkOptions.height as number | undefined) ?? videoTrack.displayHeight;
+      if (canvasWidth !== videoTrack.displayWidth || canvasHeight !== videoTrack.displayHeight) {
+        return;
+      }
+
+      const getDecoderConfig = (
+        videoTrack as unknown as { getDecoderConfig?: () => Promise<VideoDecoderConfig | null> }
+      ).getDecoderConfig;
+      if (typeof getDecoderConfig !== "function") return;
+      const decoderConfig = await getDecoderConfig.call(videoTrack);
+      if (!decoderConfig) return;
+
+      const sink = new EncodedPacketSink(videoTrack);
+      const first = await sink.getFirstPacket();
+      // Opaque clips carry no alpha side data: nothing to repair, nothing to pay for.
+      if (!first?.sideData?.alpha) return;
+
+      this.alphaPacketSink = sink;
+      this.alphaDecoderConfig = decoderConfig;
+    } catch {
+      // Any surprise here means "no repair", never a failed export.
+      this.alphaPacketSink = null;
+      this.alphaDecoderConfig = null;
+    }
   }
 
   /**
@@ -212,7 +301,185 @@ export class ExportFrameDecoder {
 
     this.reusableCtx!.clearRect(0, 0, w, h);
     this.reusableCtx!.drawImage(this.currentFrame.canvas, 0, 0);
+    await this.repairAlpha(this.currentFrame.timestamp, w, h);
     return this.reusableCanvas;
+  }
+
+  /**
+   * Overwrites the copied canvas's alpha channel with the separately-decoded alpha plane.
+   *
+   * Matched on the canvas frame's own timestamp rather than on the requested time, so the
+   * "last frame at or before" selection lives in exactly one place and the two streams
+   * cannot drift apart. Both come from the same packets, so an exact match exists; if one is
+   * not found the canvas is left as CanvasSink produced it, which is today's behaviour.
+   */
+  private async repairAlpha(timestamp: number, w: number, h: number): Promise<void> {
+    if (!this.alphaPacketSink || !this.alphaDecoderConfig || this.alphaFailed) return;
+
+    try {
+      const frame = await this.alphaFrameAt(timestamp);
+      if (!frame) return;
+
+      const layout = await this.copyAlphaPlane(frame);
+      if (!layout) return;
+      const { plane, stride } = layout;
+
+      const image = this.reusableCtx!.getImageData(0, 0, w, h);
+      const pixels = image.data;
+      for (let y = 0; y < h; y++) {
+        const planeRow = y * stride;
+        const pixelRow = y * w * 4;
+        for (let x = 0; x < w; x++) {
+          pixels[pixelRow + x * 4 + 3] = plane[planeRow + x];
+        }
+      }
+      this.reusableCtx!.putImageData(image, 0, 0);
+    } catch {
+      // One failure disarms repair for the rest of the export rather than throwing away
+      // the export or repeating the cost on every frame.
+      this.alphaFailed = true;
+      this.releaseAlphaFrames();
+    }
+  }
+
+  /**
+   * The decoded alpha frame whose timestamp matches `timestamp`, decoding forward as needed.
+   * Frames before the target are closed as they are passed over.
+   */
+  private async alphaFrameAt(timestamp: number): Promise<VideoFrame | null> {
+    // Both timestamps come from the same container fields, so this only absorbs the
+    // microsecond<->second conversion, not the 1ms container grid Stage 17 deals with.
+    const epsilon = 1e-6;
+
+    for (;;) {
+      while (this.alphaFrames.length > 0) {
+        const head = this.alphaFrames[0]!;
+        const headTimestamp = head.timestamp / 1e6;
+        if (headTimestamp < timestamp - epsilon) {
+          this.alphaFrames.shift();
+          head.close();
+          continue;
+        }
+        return headTimestamp <= timestamp + epsilon ? head : null;
+      }
+      if (this.alphaFailed) return null;
+      if (!(await this.pumpAlphaDecoder())) return null;
+    }
+  }
+
+  /**
+   * Advances the alpha stream until at least one more frame is available, or reports that
+   * the stream is finished.
+   *
+   * Two constraints shape this, both learned the hard way:
+   *
+   * - **Never flush mid-stream.** Chrome rejects the next chunk with "A key frame is
+   *   required after configure() or flush()", so flush is only usable once, at end of
+   *   input, where nothing follows it.
+   * - **"All packets fed" is not "no more frames".** The first attempt fed far ahead and
+   *   treated exhausted input as a finished stream, so it gave up on a transiently empty
+   *   queue while the frame it wanted was still in flight - and by then it had already
+   *   discarded that frame. Input is now fed only while decoded frames are outstanding,
+   *   bounded by MAX_IN_FLIGHT, and the loop waits for output instead of concluding.
+   */
+  private async pumpAlphaDecoder(): Promise<boolean> {
+    if (!this.alphaPacketSink || !this.alphaDecoderConfig) return false;
+
+    if (!this.alphaDecoder) {
+      this.alphaDecoder = new VideoDecoder({
+        output: (frame) => {
+          this.alphaInFlight--;
+          this.alphaFrames.push(frame);
+          const waiter = this.alphaOutputWaiter;
+          this.alphaOutputWaiter = null;
+          waiter?.();
+        },
+        error: () => {
+          this.alphaFailed = true;
+          const waiter = this.alphaOutputWaiter;
+          this.alphaOutputWaiter = null;
+          waiter?.();
+        },
+      });
+      this.alphaDecoder.configure(this.alphaDecoderConfig);
+    }
+
+    // The consumer wants one specific frame and discards everything before it, so running
+    // far ahead only pins full-resolution frames in memory.
+    const MAX_IN_FLIGHT = 6;
+
+    for (;;) {
+      if (this.alphaFailed) return false;
+      if (this.alphaFrames.length > 0) return true;
+
+      while (this.alphaNextPacket && this.alphaInFlight < MAX_IN_FLIGHT) {
+        const packet = this.alphaNextPacket;
+        this.alphaNextPacket = await this.alphaPacketSink.getNextPacket(packet);
+        if (packet.sideData?.alpha) {
+          this.alphaDecoder.decode(packet.alphaToEncodedVideoChunk());
+          this.alphaInFlight++;
+        }
+      }
+      if (this.alphaFrames.length > 0) return true;
+
+      if (!this.alphaNextPacket) {
+        // End of input: a single flush is safe here because nothing more will be decoded.
+        if (this.alphaEndFlushed) return false;
+        this.alphaEndFlushed = true;
+        await this.alphaDecoder.flush();
+        return !this.alphaFailed && this.alphaFrames.length > 0;
+      }
+
+      await new Promise<void>((resolve) => {
+        this.alphaOutputWaiter = resolve;
+      });
+    }
+  }
+
+  /** Copies a decoded alpha frame's Y plane, which is the alpha channel at full resolution. */
+  private async copyAlphaPlane(
+    frame: VideoFrame,
+  ): Promise<{ plane: Uint8Array; stride: number } | null> {
+    const size = frame.allocationSize();
+    if (!this.alphaBuffer || this.alphaBuffer.byteLength < size) {
+      this.alphaBuffer = new Uint8Array(size);
+    }
+    const layout = await frame.copyTo(this.alphaBuffer);
+    const plane0 = layout?.[0];
+    if (!plane0) return null;
+    // codedWidth is padded to a multiple of 64 by VP9 (1984 for a 1920-wide clip), so the
+    // row stride is read from the layout rather than assumed to be the display width.
+    return {
+      plane: this.alphaBuffer.subarray(plane0.offset),
+      stride: plane0.stride,
+    };
+  }
+
+  private releaseAlphaFrames(): void {
+    for (const frame of this.alphaFrames) frame.close();
+    this.alphaFrames = [];
+    this.alphaInFlight = 0;
+    this.alphaOutputWaiter = null;
+    this.alphaEndFlushed = false;
+  }
+
+  /** Restarts the alpha stream from the key packet at or before `timestamp`. */
+  private async resetAlphaDecoder(timestamp: number): Promise<void> {
+    if (!this.alphaPacketSink || this.alphaFailed) return;
+    this.releaseAlphaFrames();
+    try {
+      if (this.alphaDecoder) {
+        // reset() (not flush()) discards pending work and requires a key packet next,
+        // which is exactly what seeking to a key packet provides.
+        this.alphaDecoder.reset();
+        this.alphaDecoder.configure(this.alphaDecoderConfig!);
+      }
+      this.alphaNextPacket =
+        (await this.alphaPacketSink.getKeyPacket(timestamp)) ??
+        (await this.alphaPacketSink.getFirstPacket());
+    } catch {
+      this.alphaFailed = true;
+    }
   }
 
   private async resetCanvasIterator(timestamp: number): Promise<void> {
@@ -221,6 +488,7 @@ export class ExportFrameDecoder {
     this.nextFrame = null;
     this.iteratorDone = false;
     this.canvasIterator = this.sink!.canvases(timestamp)[Symbol.asyncIterator]();
+    await this.resetAlphaDecoder(timestamp);
 
     const first = await this.canvasIterator.next();
     if (first.done) {
@@ -244,6 +512,16 @@ export class ExportFrameDecoder {
     this.decodeTail = Promise.resolve();
     this.reusableCanvas = null;
     this.reusableCtx = null;
+    this.releaseAlphaFrames();
+    if (this.alphaDecoder) {
+      try { this.alphaDecoder.close(); } catch { /* already closed */ }
+      this.alphaDecoder = null;
+    }
+    this.alphaPacketSink = null;
+    this.alphaDecoderConfig = null;
+    this.alphaNextPacket = null;
+    this.alphaBuffer = null;
+    this.alphaFailed = false;
     this.initialized = false;
   }
 }
