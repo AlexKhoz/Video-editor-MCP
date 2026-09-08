@@ -2535,3 +2535,35 @@ Options, none free:
 - **Accept the floor.** ~2 MAE of edge error on alpha components in exports, preview clean.
 
 Deferred pending a decision. Nothing changed in the export path.
+
+### Option 2 result: a faithful, frame-accurate decode path does exist
+
+mediabunny exposes the WebM alpha side data per packet (`packet.sideData.alpha`,
+`packet.alphaToEncodedVideoChunk()`), and VP9 alpha is itself a valid greyscale VP9 stream.
+Driving a second `VideoDecoder` over just those chunks, with the track's own decoder config:
+
+| | format | planes | probe row 194, cols 1303-1315 |
+|---|---|---|---|
+| raw render (ground truth) | — | — | `[0,0,0,0,0,12,192,255,255,255,255,255]` |
+| ffmpeg decode (control) | — | — | `[0,0,0,4,0,14,193,255,252,253,255,255]` |
+| `CanvasSink` (today's export) | BGRA | 1 | `[0,0,0,0,0,0,206,255,255,255,255,255]` |
+| **alpha stream, own `VideoDecoder`** | **I420** | **3** | **`[0,0,0,4,0,14,193,255,252,253,255,255]`** |
+
+Cropped to the display width, the decoded alpha plane is **bit-exact with ffmpeg over the
+whole frame**: 0 of 2,073,600 pixels differ, max absolute difference 0, and the partial-alpha
+count matches at 33,399 to 33,399. The colour stream decodes to `I420` as well
+(`fullRange: false`, so it needs a proper limited-range BT.709 conversion if we ever compose
+it ourselves).
+
+Two details that cost measurement time and would bite an implementation:
+
+- `codedWidth` is **1984**, not 1920 — VP9 pads width to a multiple of 64. Scanning the coded
+  width reported exactly 64 extra partial-alpha pixels on every one of five frames; a constant
+  offset across unrelated frames was the clue that it was padding, not content. **Crop to
+  display width.**
+- All 92 packets carry alpha, and their timestamps are the file's own ms grid
+  (`0, 0.033, 0.067, 0.1, 0.133, …`), so this path keeps frame accuracy: Stage 17's tolerance
+  logic applies unchanged and no `<video>` seeking is involved.
+
+So Option 1 stays rejected and Option 4 is not needed: the fix does not have to trade
+fidelity against judder. What it costs is a second VP9 decode per exported frame.
