@@ -2406,3 +2406,132 @@ Two conclusions. The component-side fix survives to the delivered file — final
 **8.344 -> 4.939** — and the export now contributes a roughly constant **~2 MAE** of its own
 edge error regardless of component CRF, which is the floor on final edge fidelity. Lowering
 that floor means the export's own encoder settings: a separate lever, untouched here.
+
+## Stage 19 — the export's edge-fidelity floor is a decode-path difference, not an encoder setting
+
+Stage 18 closed with a deferred item: the h264 export contributed a roughly constant ~2 MAE
+of edge error regardless of the component's CRF, guessed to be "the export's own encoder
+settings". That guess was wrong, and measuring it first is the only reason we did not spend
+a change on it.
+
+### The export's encoder settings, documented
+
+Headless export goes `export-job-runner.ts` -> `WebCodecsBackend` -> mediabunny
+`VideoSampleSource`.
+
+| setting | value | reaches the encoder? |
+|---|---|---|
+| `codec` | `h264` -> `avc1.640028` (High, level 4.0) | yes |
+| `bitrate` | `12000` -> **12 Mbps** | yes, and ignored |
+| `bitrateMode` | `"vbr"` | **no** - never mapped to mediabunny's `'constant'`/`'variable'` |
+| `quality` | `85` | **no** - only the still-image path reads it |
+| `keyframeInterval` | `2` -> `2/30 = 0.067 s` | output has 2 keyframes in 93 frames, so not as written |
+| `latencyMode` | unset -> WebCodecs default `'quality'` | — |
+| `contentHint` | unset | — |
+| `framerate` | never passed | — |
+
+There is **no CRF equivalent in WebCodecs**. mediabunny's `Quality` constants are pure
+bitrate calculators (`_toVideoBitrate`): for avc at 1080p, `QUALITY_MEDIUM` = 3 Mbps,
+`HIGH` = 6, `VERY_HIGH` = 12. So `bitrate: 12000` is *already* the top of that scale.
+
+### Every encoder lever is a dead end, measured in Chrome's own encoder
+
+Probed `VideoEncoder` directly in the same headless Chrome with the same flags the export
+worker uses, fed the **ideal** frames, read decoded frame 89 at the Stage 18 pinned probe.
+(WebCodecs is gated on a secure context - on `about:blank`, `VideoEncoder` is simply not
+defined, so the probe serves its page from `127.0.0.1`.)
+
+| config | ripple | MAE | bytes |
+|---|---|---|---|
+| ideal | 0.000 | 0.000 | — |
+| **current** | **3.179** | **0.642** | 1,428,714 |
+| `bitrateMode: 'constant'` | 3.179 | 0.642 | 1,428,714 |
+| `latencyMode: 'quality'` | 3.179 | 0.642 | 1,428,714 |
+| `hardwareAcceleration: 'prefer-software'` | 3.179 | 0.642 | 1,428,714 |
+| **`bitrate: 40 Mbps`** | **3.179** | **0.642** | **1,428,714** |
+| `contentHint: 'detail'` / `'text'` | 11.957 | 0.929 | 533,217 |
+| `prefer-hardware` | — | — | unsupported headless |
+
+**Byte-identical output at 12 and 40 Mbps, and for CBR vs VBR** - the encoder ignores both.
+`contentHint` is the only knob that changes anything and it makes the edge worse. Offline
+libx264 confirms bits are not the constraint: fed the ideal frames at 2.0 Mbps it reaches
+MAE 0.399, better than the real export at 4.1 Mbps.
+
+### Attribution: most of the error arrives before the encoder
+
+| stage | ripple | MAE | edge columns (row 0) |
+|---|---|---|---|
+| ideal | 0.000 | 0.000 | `[255.0, 243.2, 67.2, 5.6]` |
+| ffmpeg decode of the webm | 5.901 | **0.446** | `[255.0, 241.3, 66.2, 5.6]` |
+| **Chrome decode via `CanvasSink`** | 2.016 | **2.357** | `[255.0, 255.0, 52.7, 5.6]` |
+| Chrome encoder, ideal frames in | 3.179 | 0.642 | `[255.0, 240.7, 69.8, 5.9]` |
+| real export | 4.939 | 2.051 | `[254.8, 249.4, 50.9, 6.1]` |
+
+The decode alone (2.357) exceeds the whole export's error (2.051); the encoder then softens
+it slightly back toward the ideal.
+
+### Which side loses the antialiasing step
+
+Alpha across the probe edge, all of the same frame 89 of the same file:
+
+```
+raw render (ground truth)                [0, 0, 0, 0, 0, 12, 192, 255, ...]
+ffmpeg decode           (control)        [0, 0, 0, 4, 0, 14, 193, 255, ...]
+A  VideoSample.copyTo (raw BGRA buffer)  [0, 0, 0, 0, 0,  0, 206, 255, ...]
+B  VideoSample.draw(ctx)                 [0, 0, 0, 0, 0,  0, 206, 255, ...]
+B2 toVideoFrame + drawImage              [0, 0, 0, 0, 0,  0, 206, 255, ...]
+C  CanvasSink({alpha:true})  (export)    [0, 0, 0, 0, 0,  0, 206, 255, ...]
+D  HTMLVideoElement          (preview)   [0, 0, 0, 4, 0, 14, 193, 255, ...]
+```
+
+**A, B, B2 and C are byte-identical**, so mediabunny's conversion is faithful - it passes on
+exactly what it was handed, and the raw decoded buffer has already lost the step. **D matches
+ffmpeg exactly.** So it is not mediabunny's conversion, and it is not "Chrome" as a whole:
+it is specifically **Chrome's WebCodecs VP9-alpha decode**, while Chrome's `<video>` media
+pipeline in the same browser is faithful.
+
+Whole-frame confirmation, counting partially-transparent pixels (antialiased contour pixels)
+per frame - a single window can miss the glyph entirely, as frames 40 and 60 did:
+
+| frame | `CanvasSink` | `<video>` | ffmpeg | sink/video |
+|---|---|---|---|---|
+| 20 | 6,816 | 18,966 | 18,966 | 0.359 |
+| 45 | 8,373 | 26,307 | 26,307 | 0.318 |
+| 70 | 10,024 | 26,934 | 26,934 | 0.372 |
+| 80 | 8,846 | 26,544 | 26,544 | 0.333 |
+| 89 | 10,381 | 33,399 | 33,399 | 0.311 |
+
+`<video>` reproduces ffmpeg's count **exactly on every frame**. `CanvasSink` keeps only
+**31-37%** of the antialiased contour - fewer even than the raw render has, so it is
+collapsing AA pixels to hard 0/255 rather than merely blurring them.
+
+This is exactly why the preview looks clean and the export does not: `Preview.tsx` /
+`video-engine.ts:479` draw alpha clips from an `HTMLVideoElement`, the export goes through
+`CanvasSink`. The Stage 7 preview/export split, a third time.
+
+One incidental confirmation of Stage 17 from inside this probe: `getSample(89/30)` returned
+the frame at **2.933**, not 2.967 - the 1 ms container grid biting a fresh piece of code.
+The probe asks for `89/30 + 0.002`.
+
+### Decision needed, and it is not a small one
+
+The decoded format is `BGRA` with `matrix: "rgb"`, `fullRange: true` - Chrome hands back
+packed RGBA for alpha-bearing VP9 rather than planar I420A, so there is no separate
+full-resolution alpha plane for us to read instead. Whether feeding `VideoDecoder` directly
+would avoid this is **untested**, and unpromising for that reason: mediabunny already uses
+`VideoDecoder`, and the BGRA buffer *is* what it produced.
+
+Options, none free:
+
+- **Switch the export's decode to the `<video>` path.** Fixes fidelity outright. Re-opens
+  frame accuracy, which is precisely what Stage 17's tolerance fix bought - `<video>`
+  seeking is tolerant by design (the probe requested 2.968667 and landed on 2.968666). Any
+  attempt needs the Stage 17 index-coded probe as its gate.
+- **Probe a direct `VideoDecoder` path** for an I420A output. One more read-only experiment,
+  low expected yield.
+- **Render components on chroma green and key them** (the Stage 4/6 path, still supported).
+  Sidesteps alpha decode entirely and reintroduces keying artifacts, which is what Stage 7
+  existed to remove.
+- **Accept the floor.** ~2 MAE of edge error on alpha components in exports, preview clean.
+
+Deferred pending a decision. Nothing changed in the export path.
