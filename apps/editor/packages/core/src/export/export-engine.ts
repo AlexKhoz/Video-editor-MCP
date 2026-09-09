@@ -937,6 +937,16 @@ export class ExportEngine {
       return;
     }
 
+    // Decided once, up front, so that a null from renderTimelineAudio inside the loop can
+    // only mean "this chunk had no content" and never "the project has no audio at all".
+    // A project with no audio still gets no audio track in the output, as before.
+    const projectHasAudio = project.timeline.tracks.some(
+      (track) => !track.muted && trackHasAudioItems(project, track.id),
+    );
+    if (!projectHasAudio) {
+      return;
+    }
+
     const chunkDuration = ExportEngine.AUDIO_EXPORT_CHUNK_DURATION_SECONDS;
 
     for (
@@ -962,16 +972,52 @@ export class ExportEngine {
         currentChunkDuration,
       );
 
-      if (!audioBuffer) {
+      // A chunk with nothing in it still has to occupy its place in the output. Skipping the
+      // write would pull every later chunk earlier by this chunk's duration and desynchronise
+      // the rest of the timeline from the video.
+      //
+      // Unreachable as things stand: renderAudio sizes an OfflineAudioContext to the whole
+      // requested window, so an empty window already comes back as a full-length silent
+      // buffer. It is written this way so that adding a per-chunk "is there any content
+      // here?" optimisation cannot quietly reintroduce the shift. See Stage 21 in NOTES.md.
+      const chunk =
+        audioBuffer ?? this.createSilentAudioBuffer(project, currentChunkDuration);
+
+      // Falling back to the old skip is better than failing the export: this branch is
+      // insurance against a future refactor, and insurance must not be the thing that
+      // breaks. createSilentAudioBuffer returns null only where the platform has no
+      // AudioBuffer constructor, which no browser export can hit.
+      if (!chunk) {
         continue;
       }
 
-      await backend.addAudioBuffer(audioBuffer);
+      await backend.addAudioBuffer(chunk);
 
       // Yield between chunks so the browser can reclaim the previous buffer
       // before the next long-running render starts.
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
+  }
+
+  /**
+   * A zero-filled buffer of exactly `duration`, matching the project's audio format, or null
+   * where the platform provides no `AudioBuffer` constructor (every browser does; jsdom and
+   * bare Node do not).
+   */
+  private createSilentAudioBuffer(
+    project: Project,
+    duration: number,
+  ): AudioBuffer | null {
+    if (typeof AudioBuffer === "undefined") {
+      return null;
+    }
+    const sampleRate = project.settings.sampleRate || 48000;
+    const numberOfChannels = project.settings.channels || 2;
+    return new AudioBuffer({
+      numberOfChannels,
+      length: Math.max(1, Math.ceil(duration * sampleRate)),
+      sampleRate,
+    });
   }
 
   private async encodeAudioWithMediaBunny(

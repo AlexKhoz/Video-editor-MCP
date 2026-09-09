@@ -658,3 +658,149 @@ describe("Export Types and Defaults", () => {
     });
   });
 });
+
+/**
+ * Audio chunks must together span the whole timeline, whatever the audio track looks like.
+ *
+ * An agent report claimed a 15s chunk with no content was skipped rather than written as
+ * silence, shifting all later audio earlier. That was false: `renderAudio` sizes an
+ * OfflineAudioContext to the entire requested window, so an empty window already comes back
+ * as a full-length silent buffer, and three real exports with gaps landed their tones at the
+ * right timestamps. See Stage 21 in NOTES.md.
+ *
+ * The mechanism was wrong but the failure mode is worth guarding: a later "skip chunks with
+ * no content" optimisation would reintroduce exactly the reported shift. These tests drive the
+ * chunk loop with an audio engine that returns `{ buffer: null }` for empty windows — the
+ * shape such an optimisation would produce — and require the writes to still cover the
+ * timeline.
+ */
+describe("ExportEngine audio chunk continuity", () => {
+  const SAMPLE_RATE = 48_000;
+
+  let engine: ExportEngine;
+  let written: number[];
+  let backend: { addAudioBuffer: (buffer: AudioBuffer) => Promise<void> };
+
+  /** A minimal stand-in: only length and sampleRate are read back. */
+  function fakeBuffer(seconds: number): AudioBuffer {
+    return {
+      length: Math.max(1, Math.ceil(seconds * SAMPLE_RATE)),
+      sampleRate: SAMPLE_RATE,
+      numberOfChannels: 2,
+      duration: seconds,
+    } as unknown as AudioBuffer;
+  }
+
+  beforeEach(async () => {
+    // createSilentAudioBuffer uses the real AudioBuffer constructor, which the node test
+    // environment does not provide.
+    vi.stubGlobal(
+      "AudioBuffer",
+      class {
+        length: number;
+        sampleRate: number;
+        numberOfChannels: number;
+        constructor(options: { length: number; sampleRate: number; numberOfChannels: number }) {
+          this.length = options.length;
+          this.sampleRate = options.sampleRate;
+          this.numberOfChannels = options.numberOfChannels;
+        }
+      },
+    );
+    engine = new ExportEngine();
+    // audioEngine is only wired up by initialize(); without it the chunk loop throws.
+    await engine.initialize();
+    written = [];
+    backend = {
+      addAudioBuffer: vi.fn(async (buffer: AudioBuffer) => {
+        written.push(buffer.length / buffer.sampleRate);
+      }),
+    };
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function projectWithAudio(timelineDuration: number, hasAudio = true) {
+    const base = createMockProject();
+    const item = base.mediaLibrary.items[0]!;
+    // Built rather than mutated: MediaItem.metadata is readonly.
+    return createMockProject({
+      mediaLibrary: {
+        items: [{ ...item, metadata: { ...item.metadata, hasAudio } }],
+      },
+      timeline: createMockTimeline({
+        tracks: [
+          createMockTrack({
+            clips: [createMockClip({ duration: timelineDuration, outPoint: timelineDuration })],
+          }),
+        ],
+        duration: timelineDuration,
+      }),
+    });
+  }
+
+  /** Returns a buffer only for windows overlapping [audioStart, audioEnd). */
+  function onlyCoverRange(audioStart: number, audioEnd: number) {
+    mockRenderAudio.mockImplementation(
+      async (_project: Project, startTime: number, duration: number) => {
+        const overlaps = startTime < audioEnd && startTime + duration > audioStart;
+        return { buffer: overlaps ? fakeBuffer(duration) : null };
+      },
+    );
+  }
+
+  async function encode(project: Project) {
+    await (
+      engine as unknown as {
+        encodeTimelineAudioToBackend: (p: Project, b: unknown) => Promise<void>;
+      }
+    ).encodeTimelineAudioToBackend(project, backend);
+    return written.reduce((total, seconds) => total + seconds, 0);
+  }
+
+  it.each([
+    ["a gap covering a whole chunk", 45, 0, 10],
+    ["a gap at the start", 45, 20, 30],
+    ["three empty leading chunks", 60, 50, 60],
+    ["audio shorter than the timeline", 45, 0, 5],
+    ["audio ending exactly on a chunk boundary", 45, 0, 15],
+    ["audio starting exactly on a chunk boundary", 45, 15, 25],
+    ["full coverage", 45, 0, 45],
+  ])("covers the timeline with %s", async (_label, timelineDuration, audioStart, audioEnd) => {
+    const project = projectWithAudio(timelineDuration);
+    onlyCoverRange(audioStart, audioEnd);
+
+    const total = await encode(project);
+
+    // Within a sample: chunk lengths are ceil()ed to whole samples.
+    expect(total).toBeCloseTo(timelineDuration, 3);
+    expect(written).toHaveLength(Math.ceil(timelineDuration / 15));
+  });
+
+  it("writes silence for empty chunks instead of skipping them", async () => {
+    // 60s timeline, audio only in the last 10s: the first three chunks are entirely empty.
+    const project = projectWithAudio(60);
+    onlyCoverRange(50, 60);
+
+    await encode(project);
+
+    expect(written).toHaveLength(4);
+    for (const seconds of written.slice(0, 3)) {
+      expect(seconds).toBeCloseTo(15, 3);
+    }
+  });
+
+  it("still writes no audio at all when the project has none", async () => {
+    // The one case that must keep skipping: a silent project gets no audio track. That is
+    // why the project-level check sits before the loop rather than inside it.
+    const project = projectWithAudio(45, false);
+    onlyCoverRange(0, 0);
+
+    const total = await encode(project);
+
+    expect(total).toBe(0);
+    expect(backend.addAudioBuffer).not.toHaveBeenCalled();
+  });
+});

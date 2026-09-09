@@ -16,6 +16,16 @@ Standing rules that apply to future work, kept here so they survive between sess
   a mismatch, so a rename means moving the directory too. By convention the project and scene
   filenames match as well (`src/projects/<id>.ts`, `src/scenes/<id>.tsx`), and `meta.json`'s
   `project` field is what actually resolves the path.
+- **A control test has to be a negative control for the specific mechanism, not just a case
+  that happened to work.** Stage 21's report came with one: an earlier project re-exported
+  fine on the same code, offered as proof the bug needed an audio track that did not span the
+  timeline. It proved nothing — that project's audio covered the whole timeline, so music was
+  playing wherever the real cause (a clip's own audio) also played, masking it. The control
+  could not distinguish "no bug" from "bug present but masked", which is the one thing a
+  control exists to do. Before trusting one, ask: *if the reported mechanism were real, would
+  this case actually look different?* If not, it is a coincidence, not evidence. Related:
+  the metric traps in Stages 17-19 (a matcher below its noise floor, and ripple falling while
+  fidelity fell with it) are the same failure in measurement rather than in controls.
 - **Projects created through the MCP server get a `-MCP` suffix, enforced server-side.**
   `create_project` appends it in `apps/mcp-server/src/naming.js` before forwarding to the API,
   so every agent-created project is identifiable in the project list whether or not the calling
@@ -2841,3 +2851,83 @@ another track must pass `alpha: true`, or transparency becomes black and — on 
 erases everything below. Stage 7 (export decode), Stage 19 (alpha fidelity in that decoder),
 Stage 20 (the `renderFrame` fallback). The guard test now enforces it; if it ever fails, the
 answer is in this section rather than a fresh investigation.
+
+## Stage 21 — the audio-gap bug that wasn't, and what the symptom actually was
+
+An MCP agent doing real work reported that audio is encoded in 15s chunks and that a chunk with
+no content is skipped instead of written as silence, shifting all later audio earlier. It came
+with evidence: a correlation of 1.0 between the first 4s of a broken export and the packshot's
+own audio, -0.17 against the intended music, plus a "control" export of an earlier project that
+came out fine.
+
+**No such bug exists.** The `continue` is real and sits at `export-engine.ts:965`, but it cannot
+shift anything, for three independent reasons:
+
+- `hasAudio` in `renderTimelineAudio` is **project-level** —
+  `timeline.tracks.some(t => !t.muted && trackHasAudioItems(project, t.id))`. If the project has
+  audio anywhere, it is true for every chunk.
+- `renderDuration` is always > 0 inside the loop: `currentChunkDuration` is
+  `min(chunkDuration, timelineDuration - startTime)` and the loop guard is
+  `startTime < timelineDuration`.
+- `renderAudio` **always returns a full-length buffer**. It builds
+  `new OfflineAudioContext(channels, ceil(safeDuration * sampleRate), sampleRate)` — sized to the
+  requested window — and renders clips into it. An empty window is a full-length *silent* buffer,
+  never a short one and never null.
+
+So the only way to reach that `continue` is a project with no audio at all, where every chunk is
+skipped uniformly: no shift, just no audio track. Confirmed on real exports — a silent-webm
+project yields `0,h264,video` only, while a project with audio yields `0,h264,video` +
+`1,aac,audio`.
+
+### Measured, not argued
+
+Three exports with tone-coded audio, read back per second as RMS + dominant frequency, so each
+window is unambiguous without correlating against anything:
+
+| scenario | timeline | audio placed at | measured |
+|---|---|---|---|
+| gap covering a whole chunk | 45s | 440Hz 0-10s, 880Hz 30-40s | 440 at 0-10, silence 10-30, **880 at 30**, silence 40-45 |
+| gap at the start | 45s | 880Hz 20-30s | packshot's own 220Hz at 0-10, silence 10-20, **880 at 20** |
+| three empty leading chunks | 60s | 880Hz 50-60s | 50s of silence, **880 at 50** |
+
+The first is the hardest case for the reported mechanism: the gap covers the whole 15-30s chunk,
+so a skipped chunk would have pulled 880Hz to 15s. It landed at 30s.
+
+### What the agent actually heard
+
+Scenario two reproduces their correlation result exactly. A video clip's **own embedded audio is
+mixed into the export**, as in any NLE. The music was never displaced; the packshot's audio was
+simply *also* present where they expected silence or music. That is why their `volume: 0`
+workaround fixed it — and `set_clip_transform { clipId, volume: 0 }` is the supported control,
+already in the op vocabulary and honoured at `audio-engine.ts:363`. Rebuilding the audio bed with
+ffmpeg was never necessary.
+
+The op vocabulary now says so explicitly, since the omission is what cost the detour: a clip's own
+audio is mixed by default, `volume: 0` silences it, and silence in an audio track is exported as
+real silence so gaps and a short music bed stay in sync.
+
+### The defensive change, and a bug in the insurance itself
+
+The mechanism was wrong but the failure mode is worth guarding: a later "skip chunks with no
+content" optimisation would reintroduce exactly the reported shift. So the loop now writes a
+silent buffer instead of `continue`, and the project-level "has any audio" check moved *above*
+the loop, so a null inside it can only mean "this chunk had no content" and a silent project
+still gets no audio track.
+
+The first version of that insurance was worse than the bug it guarded. `createSilentAudioBuffer`
+used the DOM `AudioBuffer` constructor, which is absent under Node, so it **threw** — skipping the
+pre-muxing cache release and failing a pre-existing test ("keeps decoder caches warm while
+throttling browser exports", 1 clear instead of 2). It now returns null where no `AudioBuffer`
+constructor exists and the loop falls back to the old skip: insurance must not be the thing that
+breaks the export.
+
+### Verification
+
+- Nine tests appended to `export-engine.test.ts`: seven gap shapes (including audio starting and
+  ending exactly on a chunk boundary) asserting the written chunks sum to the timeline duration,
+  one asserting empty chunks are written as 15s of silence rather than skipped, one asserting a
+  project with no audio still writes nothing.
+- Mutation-tested: reintroducing the skip fails 7; removing the project-level guard fails 1;
+  restored, 41/41 pass in that file.
+- End-to-end after the change: the gap project re-exports with the identical tone layout, and the
+  no-audio project still produces a video-only file.

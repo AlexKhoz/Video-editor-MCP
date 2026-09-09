@@ -81,6 +81,11 @@ Available ops:
 - set_clip_transform { clipId, transform?, opacity?, volume? }
     transform accepts { position:{x,y}, scale:{x,y}, rotation, anchor:{x,y}, fitMode }.
     fitMode is "contain" | "cover" | "stretch". opacity and volume are 0-1.
+    A video clip's OWN embedded audio is mixed into the export by default, alongside
+    anything on your audio tracks. If you only want your own music or voiceover, silence
+    the video clip with volume: 0 - do not pre-process the file or rebuild the audio bed.
+    Silence in an audio track is exported as real silence, so gaps and a music bed shorter
+    than the timeline are fine and stay in sync.
 
 - add_text_clip { trackId, text, startTime, duration, style?, transform? }
     A text overlay. style accepts { fontFamily, fontSize, fontWeight, color, strokeColor,
