@@ -2695,10 +2695,36 @@ dominated by encoding and headless-Chrome startup and would bury the change.
 **+12-16% end-to-end** against the 10-13s exports, and **zero for opaque clips**. Accepted:
 a 3.4x fidelity gain for ~15% on alpha clips only.
 
-#### Open item (not urgent)
+#### Gates 4 and 5, end-to-end — CLOSED
 
-The **end-to-end** halves of gates 4 and 5 are unrun: Docker would not start, so the export
-queue was unavailable. Docker Desktop's own dialog, from its log:
+Run later, once Docker was back. The same project (a transparent `orbit-headline-Rep` over a
+white background clip, 92 frames) exported through the real queue with the repair armed and
+then disarmed in place, interleaved on one machine, measured at the same pinned probe:
+
+| | ripple | MAE vs ideal | bytes |
+|---|---|---|---|
+| repair disarmed | 4.939 | **2.051** | 1,589,464 |
+| repair armed | 7.660 | **0.790** | 1,577,104 |
+
+**MAE 2.6x better in the delivered file.** The disarmed run reproduces the pre-repair
+measurement from this stage *exactly* (4.939 / 2.051 / 1,589,464 bytes), which is what
+validates the whole chain rather than just the new number. Ripple rising is correct and is the
+Stage 19 lesson repeating: the disarmed export has less row-to-row variation because CanvasSink
+flattened the antialiasing, and MAE is the metric that sees through that.
+
+**Wall clock (gate 5, end-to-end):** armed `10.0, 10.5, 10.0` (mean 10.17s), disarmed
+`10.1, 10.1, 9.9` (mean 10.03s) — **+0.13s, +1.3%**, less than the spread within either group.
+So the +32% *decode-stage* cost measured earlier is invisible at the export level, and the
+"+12-16% end-to-end" estimate in this stage was pessimistic: encoding and headless-Chrome
+startup dominate, and the extra VP9 decode hides inside them.
+
+**Chroma path:** byte-identical to Stage 12 — 3,379,403 bytes across the Stage 12, Stage 20 and
+this export, with every green/white/black count unchanged. An opaque render leaves the repair
+disarmed, now confirmed end-to-end rather than only from reading the code.
+
+A whole-frame visual check at the same time found nothing the probe would have missed.
+
+The Docker failure that originally blocked this, kept for the next time it happens:
 
 > `starting services: initializing Inference manager: listening on
 > unix://<HOME>\AppData\Local\Docker\run\dockerInference: remove ...dockerInference: The file
@@ -2707,9 +2733,7 @@ queue was unavailable. Docker Desktop's own dialog, from its log:
 Not a disk or WSL problem - H: had 341 GB free, `H:\Docker Disk\DockerDesktopWSL` existed and
 `wsl -d docker-desktop echo ok` worked. Two orphaned entries in `%LOCALAPPDATA%\Docker\run\`
 (`dockerInference`, `userAnalyticsOtlpHttp.sock`) cannot be stat'd, bound or removed. A reboot
-cleared the same failure earlier in this session. **To do next time the stack is up: run the
-full export regression once, as a close-the-loop check on the whole pipeline together.** The
-decoder-level evidence above is not in doubt; this is belt and braces on core export code.
+cleared it both times it happened, and is the first thing to try.
 
 ### The pattern behind Stages 17-19
 
