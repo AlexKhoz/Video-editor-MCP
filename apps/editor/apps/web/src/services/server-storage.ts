@@ -19,9 +19,17 @@ const BASE =
 export interface ProjectSummary {
   id: string;
   name: string;
+  /**
+   * Free-text folder. The server reports DEFAULT_PROJECT_FOLDER for a project that has
+   * never been filed, so this is always a string - the panel never has to handle null.
+   */
+  folder: string;
   createdAt: number;
   updatedAt: number;
 }
+
+/** What the server calls a project with no folder. */
+export const DEFAULT_PROJECT_FOLDER = "Uncategorized";
 
 export interface ComponentMetadataEntry {
   mediaId: string;
@@ -73,10 +81,20 @@ export function mediaUrl(mediaId: string): string {
 
 /* -------------------------------------------------------------- projects */
 
-export async function listServerProjects(): Promise<ProjectSummary[]> {
-  const response = await fetch(`${BASE}/projects`);
+export async function listServerProjects(
+  folder?: string,
+): Promise<ProjectSummary[]> {
+  const query = folder ? `?folder=${encodeURIComponent(folder)}` : "";
+  const response = await fetch(`${BASE}/projects${query}`);
   const body = await asJson<{ projects: ProjectSummary[] }>(response, "Listing projects");
   return body.projects;
+}
+
+/** The distinct folders in use, for the picker. */
+export async function listServerProjectFolders(): Promise<string[]> {
+  const response = await fetch(`${BASE}/projects/folders`);
+  const body = await asJson<{ folders: string[] }>(response, "Listing folders");
+  return body.folders;
 }
 
 export async function loadServerProject(

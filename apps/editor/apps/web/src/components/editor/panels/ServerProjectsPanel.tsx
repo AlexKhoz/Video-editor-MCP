@@ -8,6 +8,7 @@ import {
   loadServerProject,
   ProjectConflictError,
   saveServerProject,
+  DEFAULT_PROJECT_FOLDER,
   type ProjectSummary,
 } from "../../../services/server-storage";
 import { toast } from "../../../stores/notification-store";
@@ -39,6 +40,8 @@ export const ServerProjectsPanel: React.FC = () => {
    */
   const [knownUpdatedAt, setKnownUpdatedAt] = useState<number | null>(null);
   const [conflict, setConflict] = useState<ProjectConflictError | null>(null);
+  /** "" means every folder. Filtering happens client-side: the list is already loaded. */
+  const [folderFilter, setFolderFilter] = useState("");
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -53,6 +56,36 @@ export const ServerProjectsPanel: React.FC = () => {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  /**
+   * Projects bucketed by folder, preserving the server's newest-first order within each
+   * bucket. The default folder is pushed last so real folders read first; everything else
+   * is alphabetical.
+   */
+  const grouped = React.useMemo(() => {
+    const map = new Map<string, ProjectSummary[]>();
+    for (const summary of projects ?? []) {
+      const key = summary.folder || DEFAULT_PROJECT_FOLDER;
+      const bucket = map.get(key);
+      if (bucket) bucket.push(summary);
+      else map.set(key, [summary]);
+    }
+    return map;
+  }, [projects]);
+
+  const folders = React.useMemo(
+    () =>
+      [...grouped.keys()].sort((a, b) => {
+        if (a === DEFAULT_PROJECT_FOLDER) return 1;
+        if (b === DEFAULT_PROJECT_FOLDER) return -1;
+        return a.localeCompare(b);
+      }),
+    [grouped],
+  );
+
+  const visibleFolders = folderFilter
+    ? folders.filter((folder) => folder === folderFilter)
+    : folders;
 
   const handleSave = useCallback(
     async (force = false) => {
@@ -220,31 +253,73 @@ export const ServerProjectsPanel: React.FC = () => {
             Nothing saved yet. Press “Save to server”.
           </p>
         )}
-        <ul className="flex flex-col gap-2">
-          {projects?.map((summary) => (
-            <li key={summary.id}>
-              <button
-                type="button"
-                aria-label={`Open server project ${summary.name}`}
-                disabled={busy !== null}
-                onClick={() => void handleOpen(summary)}
-                className={`w-full rounded-lg border p-3 text-left transition-colors ${
-                  summary.id === project.id
-                    ? "border-accent bg-selected"
-                    : "border-border/70 bg-bg-2"
-                }`}
-              >
-                <span className="block text-[13px] font-semibold text-fg">
-                  {summary.name}
-                </span>
-                <span className="mt-0.5 block text-[11px] text-fg-muted">
-                  updated {new Date(summary.updatedAt).toLocaleString()}
-                  {summary.id === project.id ? " · open" : ""}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        {folders.length > 1 && (
+          <div className="mb-3 flex items-center gap-2">
+            <label
+              htmlFor="server-projects-folder-filter"
+              className="text-[11px] text-fg-muted"
+            >
+              Folder
+            </label>
+            <select
+              id="server-projects-folder-filter"
+              aria-label="Filter projects by folder"
+              value={folderFilter}
+              onChange={(event) => setFolderFilter(event.target.value)}
+              className="flex-1 rounded-md border border-border/70 bg-bg-2 px-2 py-1 text-[12px] text-fg"
+            >
+              <option value="">All folders ({projects?.length ?? 0})</option>
+              {folders.map((folder) => (
+                <option key={folder} value={folder}>
+                  {folder} ({grouped.get(folder)?.length ?? 0})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {visibleFolders.length === 0 && projects && projects.length > 0 && (
+          <p className="text-[12px] text-fg-muted">
+            Nothing in “{folderFilter}”.
+          </p>
+        )}
+
+        {visibleFolders.map((folder) => (
+          <section key={folder} className="mb-3" aria-label={`Folder ${folder}`}>
+            <h4 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
+              {folder}
+              <span className="ml-1.5 font-normal normal-case tracking-normal">
+                ({grouped.get(folder)!.length})
+              </span>
+            </h4>
+            <ul className="flex flex-col gap-2">
+              {grouped.get(folder)!.map((summary) => (
+                <li key={summary.id}>
+                  <button
+                    type="button"
+                    aria-label={`Open server project ${summary.name}`}
+                    disabled={busy !== null}
+                    onClick={() => void handleOpen(summary)}
+                    className={`w-full rounded-lg border p-3 text-left transition-colors ${
+                      summary.id === project.id
+                        ? "border-accent bg-selected"
+                        : "border-border/70 bg-bg-2"
+                    }`}
+                  >
+                    <span className="block text-[13px] font-semibold text-fg">
+                      {summary.name}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-fg-muted">
+                      {summary.folder} · updated{" "}
+                      {new Date(summary.updatedAt).toLocaleString()}
+                      {summary.id === project.id ? " · open" : ""}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
       </div>
 
       {busy && busy !== "Saving…" && (

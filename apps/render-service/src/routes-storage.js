@@ -17,6 +17,7 @@ import {
   insertMedia,
   listComponentMetadata,
   listMedia,
+  listProjectFolders,
   listProjects,
   upsertComponentMetadata,
   upsertProject,
@@ -103,7 +104,23 @@ export async function registerStorageRoutes(app) {
 
   /* -------------------------------------------------------------- projects */
 
-  app.get("/projects", async () => ({ projects: listProjects() }));
+  app.get("/projects", async (request) => {
+    const { folder } = request.query ?? {};
+    return {
+      projects: listProjects(
+        typeof folder === "string" && folder !== "" ? { folder } : {},
+      ),
+    };
+  });
+
+  /**
+   * The distinct folders in use, for a picker.
+   *
+   * Declared before `/projects/:id` for readability only — find-my-way matches static
+   * segments ahead of parametric ones regardless of registration order, so "folders" can
+   * never be swallowed as an id. Verified with a real request, not assumed.
+   */
+  app.get("/projects/folders", async () => ({ folders: listProjectFolders() }));
 
   app.get("/projects/:id", async (request, reply) => {
     const record = getProject(request.params.id);
@@ -112,18 +129,18 @@ export async function registerStorageRoutes(app) {
   });
 
   app.post("/projects", async (request, reply) => {
-    const { id, name, project } = request.body ?? {};
+    const { id, name, project, folder } = request.body ?? {};
     if (!project || typeof project !== "object") {
       return reply.code(400).send({ error: "project (object) is required" });
     }
     const projectId = typeof id === "string" && id ? id : (project.id ?? randomUUID());
     const projectName = typeof name === "string" && name ? name : (project.name ?? "Untitled");
-    const saved = upsertProject({ id: projectId, name: projectName, project });
+    const saved = upsertProject({ id: projectId, name: projectName, project, folder });
     return reply.code(201).send(saved);
   });
 
   app.put("/projects/:id", async (request, reply) => {
-    const { name, project, expectedUpdatedAt } = request.body ?? {};
+    const { name, project, folder, expectedUpdatedAt } = request.body ?? {};
     if (!project || typeof project !== "object") {
       return reply.code(400).send({ error: "project (object) is required" });
     }
@@ -144,7 +161,9 @@ export async function registerStorageRoutes(app) {
 
     const projectName =
       typeof name === "string" && name ? name : (project.name ?? "Untitled");
-    return upsertProject({ id: request.params.id, name: projectName, project });
+    // folder is passed through as-is: undefined leaves whatever is stored alone, so an
+    // ordinary editor save cannot reset it.
+    return upsertProject({ id: request.params.id, name: projectName, project, folder });
   });
 
   app.delete("/projects/:id", async (request, reply) => {

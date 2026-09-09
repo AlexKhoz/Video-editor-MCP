@@ -64,7 +64,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const service = {
   health: () => request("GET", "/health"),
   listComponents: () => request("GET", "/components"),
-  listProjects: () => request("GET", "/projects"),
+  listProjects: (folder) =>
+    request(
+      "GET",
+      folder ? `/projects?folder=${encodeURIComponent(folder)}` : "/projects",
+    ),
+  listProjectFolders: () => request("GET", "/projects/folders"),
   getProject: (id) => request("GET", `/projects/${encodeURIComponent(id)}`),
   createProject: (body) => request("POST", "/projects/new", { body }),
   applyOps: (id, body) => request("POST", `/projects/${encodeURIComponent(id)}/ops`, { body }),

@@ -10,6 +10,16 @@ import { withMcpProjectSuffix } from "./naming.js";
 import { SERVICE_URL, service } from "./service.js";
 
 /**
+ * What the render-service reports for a project with no folder.
+ *
+ * Duplicated here rather than imported: this package depends only on the render-service's
+ * HTTP API, never on its internals, so it cannot reach into db.js for the constant. It is
+ * only ever used to write tool descriptions and to fill in a missing field, never to decide
+ * what gets stored - the server is authoritative.
+ */
+const DEFAULT_PROJECT_FOLDER = "Uncategorized";
+
+/**
  * MCP server for the browser video editor.
  *
  * Every tool is a thin wrapper over one render-service HTTP endpoint — no business logic
@@ -267,14 +277,26 @@ server.registerTool(
   {
     title: "List saved projects",
     description:
-      "Lists projects saved on the server, newest first, with id, name and last-updated " +
-      "time. Use it to find an existing project to modify or export.",
-    inputSchema: {},
+      "Lists projects saved on the server, newest first, with id, name, folder and " +
+      "last-updated time. Use it to find an existing project to modify or export - and to " +
+      "see which folders already exist, so related work can go in the same one instead of " +
+      "inventing a new folder each time. Projects with no folder report " +
+      `"${DEFAULT_PROJECT_FOLDER}". Pass folder to list only that folder.`,
+    inputSchema: {
+      folder: z
+        .string()
+        .optional()
+        .describe(
+          "Only list projects in this folder. Omit for all of them. " +
+            `"${DEFAULT_PROJECT_FOLDER}" lists the ones that have never been filed.`,
+        ),
+    },
   },
-  async () => {
+  async ({ folder }) => {
     try {
-      const { projects } = await service.listProjects();
-      return ok(`${projects.length} saved projects.`, projects);
+      const { projects } = await service.listProjects(folder);
+      const where = folder ? ` in "${folder}"` : "";
+      return ok(`${projects.length} saved projects${where}.`, projects);
     } catch (error) {
       return fail(error);
     }
@@ -302,9 +324,17 @@ server.registerTool(
       width: z.number().int().positive().optional().describe("Canvas width in pixels (default 1920)."),
       height: z.number().int().positive().optional().describe("Canvas height in pixels (default 1080)."),
       frameRate: z.number().positive().optional().describe("Frames per second (default 30)."),
+      folder: z
+        .string()
+        .optional()
+        .describe(
+          "Free-text folder to file the project under, e.g. \"Client Acme\". Call " +
+            "list_projects first and reuse an existing folder when the work is related. " +
+            `Omitted means "${DEFAULT_PROJECT_FOLDER}".`,
+        ),
     },
   },
-  async ({ name, width, height, frameRate }) => {
+  async ({ name, width, height, frameRate, folder }) => {
     try {
       // Applied here rather than trusted to the caller: see naming.js for why.
       const created = await service.createProject({
@@ -312,11 +342,16 @@ server.registerTool(
         width,
         height,
         frameRate,
+        folder,
       });
       const tracks = created.project.timeline.tracks.map((track) => ({ trackId: track.id, name: track.name }));
-      return ok(`Created project "${created.name}" (${created.id}).`, {
+      return ok(
+        `Created project "${created.name}" (${created.id}) in folder ` +
+          `"${created.folder ?? DEFAULT_PROJECT_FOLDER}".`,
+        {
         projectId: created.id,
         name: created.name,
+        folder: created.folder ?? DEFAULT_PROJECT_FOLDER,
         updatedAt: created.updatedAt,
         tracks,
         settings: created.project.settings,

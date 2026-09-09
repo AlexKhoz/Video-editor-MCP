@@ -70,22 +70,64 @@ export function getDb() {
   } catch {
     // already present
   }
+  // Free-text organisation, one folder per project. Deliberately nullable with no
+  // backfill: NULL means "never categorised" and is presented as DEFAULT_PROJECT_FOLDER,
+  // which keeps it distinguishable from a project someone deliberately filed under a
+  // folder of that name. Kept as a column rather than inside the project JSON because it
+  // describes the stored record, not the composition — see NOTES.md Stage 22.
+  try {
+    db.exec("ALTER TABLE projects ADD COLUMN folder TEXT");
+  } catch {
+    // already present
+  }
 
   return db;
 }
 
+/** What a project with no folder reports as. Never written to the column. */
+export const DEFAULT_PROJECT_FOLDER = "Uncategorized";
+
 /* ---------------------------------------------------------------- projects */
 
-export function listProjects() {
-  return getDb()
-    .prepare("SELECT id, name, created_at, updated_at FROM projects ORDER BY updated_at DESC")
-    .all()
-    .map((row) => ({
-      id: row.id,
-      name: row.name,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+/**
+ * Saved projects, newest first. `folder` filters to one folder; asking for the default
+ * folder also returns the rows that have never been categorised, since those are the same
+ * thing as far as a caller is concerned.
+ */
+export function listProjects({ folder } = {}) {
+  const base =
+    "SELECT id, name, folder, created_at, updated_at FROM projects";
+  const order = " ORDER BY updated_at DESC";
+
+  let rows;
+  if (folder === undefined || folder === null) {
+    rows = getDb().prepare(base + order).all();
+  } else if (folder === DEFAULT_PROJECT_FOLDER) {
+    rows = getDb()
+      .prepare(`${base} WHERE folder IS NULL OR folder = ?${order}`)
+      .all(folder);
+  } else {
+    rows = getDb().prepare(`${base} WHERE folder = ?${order}`).all(folder);
+  }
+
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    folder: row.folder ?? DEFAULT_PROJECT_FOLDER,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+/** The distinct folders in use, so a picker does not have to list every project. */
+export function listProjectFolders() {
+  const rows = getDb()
+    .prepare("SELECT DISTINCT folder FROM projects ORDER BY folder")
+    .all();
+  const names = new Set(
+    rows.map((row) => row.folder ?? DEFAULT_PROJECT_FOLDER),
+  );
+  return [...names].sort((a, b) => a.localeCompare(b));
 }
 
 export function getProject(id) {
@@ -94,26 +136,64 @@ export function getProject(id) {
   return {
     id: row.id,
     name: row.name,
+    folder: row.folder ?? DEFAULT_PROJECT_FOLDER,
     project: JSON.parse(row.data),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-export function upsertProject({ id, name, project }) {
+/**
+ * Insert or update a project.
+ *
+ * `folder` is only written when the caller passes one: `COALESCE(excluded.folder, …)`
+ * means an ordinary save — which carries the project JSON but knows nothing about
+ * folders — cannot null out a folder someone set. Pass an empty string to clear it back
+ * to the default.
+ */
+export function upsertProject({ id, name, project, folder }) {
   const now = Date.now();
   const data = JSON.stringify(project);
+  const setsFolder = folder !== undefined;
+  const folderValue = setsFolder ? normaliseFolder(folder) : null;
+
+  // Two statements rather than one with COALESCE: "no folder given" and "clear the folder"
+  // both reduce to SQL NULL, so a single statement cannot tell them apart — COALESCE made
+  // the explicit clear silently do nothing. They differ only in whether DO UPDATE touches
+  // the folder column; both take the same six parameters.
+  const SET_FOLDER = `
+    INSERT INTO projects (id, name, data, folder, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      data = excluded.data,
+      folder = excluded.folder,
+      updated_at = excluded.updated_at`;
+  const KEEP_FOLDER = `
+    INSERT INTO projects (id, name, data, folder, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      data = excluded.data,
+      updated_at = excluded.updated_at`;
+
   getDb()
-    .prepare(
-      `INSERT INTO projects (id, name, data, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         name = excluded.name,
-         data = excluded.data,
-         updated_at = excluded.updated_at`,
-    )
-    .run(id, name, data, now, now);
-  return { id, name, updatedAt: now, bytes: data.length };
+    .prepare(setsFolder ? SET_FOLDER : KEEP_FOLDER)
+    .run(id, name, data, folderValue, now, now);
+  const saved = { id, name, updatedAt: now, bytes: data.length };
+  if (folder !== undefined) saved.folder = folderValue ?? DEFAULT_PROJECT_FOLDER;
+  return saved;
+}
+
+/**
+ * Trims a caller-supplied folder name, mapping blank and the default label to NULL so the
+ * column only ever holds a real, deliberate folder.
+ */
+export function normaliseFolder(folder) {
+  if (typeof folder !== "string") return null;
+  const trimmed = folder.trim();
+  if (trimmed === "" || trimmed === DEFAULT_PROJECT_FOLDER) return null;
+  return trimmed;
 }
 
 export function deleteProject(id) {

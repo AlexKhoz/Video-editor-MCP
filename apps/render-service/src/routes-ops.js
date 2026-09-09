@@ -30,9 +30,9 @@ export async function registerOpsRoutes(app) {
 
   /** Create an empty, valid project server-side (no browser involved). */
   app.post("/projects/new", async (request, reply) => {
-    const { name, width, height, frameRate } = request.body ?? {};
+    const { name, width, height, frameRate, folder } = request.body ?? {};
     const project = createProject({ name, width, height, frameRate });
-    const saved = upsertProject({ id: project.id, name: project.name, project });
+    const saved = upsertProject({ id: project.id, name: project.name, project, folder });
     return reply.code(201).send({ ...saved, project });
   });
 

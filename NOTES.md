@@ -16,6 +16,13 @@ Standing rules that apply to future work, kept here so they survive between sess
   a mismatch, so a rename means moving the directory too. By convention the project and scene
   filenames match as well (`src/projects/<id>.ts`, `src/scenes/<id>.tsx`), and `meta.json`'s
   `project` field is what actually resolves the path.
+- **Project folders are a server-side column, not part of the project JSON.** One free-text
+  folder per project on `projects.folder`, nullable, reported as "Uncategorized" when unset.
+  Deliberately *not* an `apply_project_ops` verb: `project.name` is part of the composition
+  (title bar, export metadata) whereas a folder describes the stored record, and keeping it
+  out of the JSON means an editor save cannot silently reset it. Set it on
+  `POST /projects/new`, `POST /projects` or `PUT /projects/:id`; read it everywhere a project
+  is returned. See Stage 22.
 - **A control test has to be a negative control for the specific mechanism, not just a case
   that happened to work.** Stage 21's report came with one: an earlier project re-exported
   fine on the same code, offered as proof the bug needed an audio track that did not span the
@@ -2955,3 +2962,103 @@ breaks the export.
   restored, 41/41 pass in that file.
 - End-to-end after the change: the gap project re-exports with the identical tone layout, and the
   no-audio project still produces a video-only file.
+
+## Stage 22 — project folders
+
+One free-text folder per project, no predefined structure. A column on `projects`, plus a
+filter, a folder list, an MCP param and grouping in the Projects panel.
+
+### Where the routes actually live
+
+Worth recording because it is not obvious: `GET/POST /projects`, `PUT /projects/:id` and
+**`DELETE /projects/:id`** are in `routes-storage.js`, while `routes-ops.js` holds
+`POST /projects/new`, `/ops`, `/export` and `/frame`. Folder plumbing therefore touches both.
+The delete endpoint exists and sweeps orphaned media afterwards — earlier in this session it
+was wrongly reported as missing, from checking only `routes-ops.js`, and two rounds of test
+cleanup went through raw SQLite as a result. Use the endpoint.
+
+### Migration: NULL, presented as "Uncategorized"
+
+`ALTER TABLE projects ADD COLUMN folder TEXT` through the same tolerant try/catch already
+used twice for `media`. **No backfill.** The column stores NULL and the API reports
+`DEFAULT_PROJECT_FOLDER`:
+
+- nothing to half-apply across existing rows;
+- NULL keeps "never categorised" distinguishable from "deliberately filed under a folder
+  called Uncategorized", which a backfilled literal would erase forever;
+- the default lives in one place, the row-to-object mapping, so it cannot drift between
+  `listProjects` and `getProject`.
+
+The consequence needing care: `?folder=Uncategorized` has to match NULL rows, so that filter
+special-cases the default to `folder IS NULL OR folder = ?`. It has its own test.
+
+Verified on the real database: all 25 pre-existing projects reported `Uncategorized`
+immediately, and one opened with its tracks and media intact.
+
+### Not an ops verb, and not in the project JSON
+
+`rename_project` is in the ops vocabulary, so the precedent cuts both ways. The distinction:
+`project.name` **is part of the composition** — it shows in the editor title bar and is
+written into the exported file's metadata (`output.setMetadataTags({ title: project.name })`).
+A folder affects nothing about the video; it describes the stored record, and project-kit is
+"pure-JSON project manipulation" with no concept that a record exists. Hence no
+`set_project_folder`, and `packages/project-kit` has **zero** changed files.
+
+Risk decided it as much as taxonomy. In the JSON, every save path would have to carry the
+field; `getFullProject()` spreads `...project` so it probably would, but the editor's
+`Project` type does not declare it and anything reconstructing rather than spreading would
+drop it — silently resetting a folder on save, the exact failure class this session kept
+hitting. As a column, `upsertProject`'s `DO UPDATE SET name, data, updated_at` cannot touch
+it, so an editor save provably cannot clobber a folder.
+
+Cost: an agent sets a folder at create time but cannot re-file through ops. `PUT` can re-file,
+so the capability exists; only the ops route lacks it.
+
+### A bug the tests caught: two states, one NULL
+
+The first `upsertProject` used `folder = COALESCE(excluded.folder, projects.folder)` to make
+an omitted folder leave the stored one alone. That works for "omitted" and breaks "clear it":
+`folder: undefined` and `folder: ""` both reduce to SQL NULL, so COALESCE cannot tell them
+apart and the explicit clear silently did nothing. Now two statements — identical except for
+whether `DO UPDATE` touches `folder` — chosen on `folder !== undefined`.
+
+Mutation-tested four ways: always writing folder fails the "omitted must not clear" test;
+never writing it fails three; dropping the NULL branch from the default filter fails the
+uncategorised test; storing the label instead of NULL fails two.
+
+That exercise also found a **gap in the tests themselves**. "Never write folder" initially
+failed only one test, because a fresh INSERT always carries its folder from the VALUES clause —
+only updates go through `DO UPDATE`. So setting a folder on an existing project, which is what
+re-filing does, was untested. Two tests added; the same mutation now fails three.
+
+### Verification
+
+All seven, against the running service unless noted.
+
+| | result |
+|---|---|
+| 1. create with an explicit folder | stored and returned by create, `GET /projects/:id` and `GET /projects` |
+| 2. create without one | `Uncategorized` on read; create echoes no folder at all |
+| 3. `?folder=` | 2 rows for a two-project folder, 1 for a one-project folder, 0 for an unknown one, and the default folder includes never-categorised rows |
+| 4. `GET /projects/folders` | `["Client Acme","Internal Tools","Uncategorized"]`, distinct and sorted |
+| 5. MCP round-trip | `create_project` with folder → echoed and persisted (read back from HTTP, not from the tool reply); `list_projects` carries folder on all 28 projects and filters to 2; the `-MCP` suffix still applies |
+| 6. Projects panel, real browser | three folder sections, default sorted last, per-folder counts in the headings, folder name on every row, filter with 4 options, selecting one leaves one section, clearing restores three |
+| 7. pre-folder project | listed, opens, and loads with 2 tracks and 2 media |
+
+Two things were verified rather than assumed, both flagged before implementing:
+
+- **Route shadowing.** `/projects/folders` against `/projects/:id` returns
+  `{"folders":[…]}`, not `{"error":"Unknown project"}`. find-my-way prefers static segments,
+  and a real request confirms it — had it shadowed, the folder list would have looked like a
+  client bug.
+- **`upsertProject` not nulling folder.** Asserted at the unit level and again end-to-end: a
+  `PUT` carrying only name and project leaves the folder intact, and the rename still applies.
+
+Suites: render-service 26/26 (13 new), project-kit 27/27 with zero changed files, mcp-server
+15/15, core and web typechecks clean.
+
+### One thing the UI run got wrong
+
+The panel assertion first failed on names, expecting a `-MCP` suffix. The app was right: those
+fixtures were created over plain HTTP, not through MCP, so they correctly have no suffix. The
+assertion was wrong, not the grouping.
