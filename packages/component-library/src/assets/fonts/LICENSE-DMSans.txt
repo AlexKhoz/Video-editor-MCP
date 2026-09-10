@@ -1,0 +1,24 @@
+DMSans-Regular-latin.woff2
+==========================
+
+DM Sans, by Colophon Foundry, Jonny Pinhorn and Indian Type Foundry.
+Licensed under the SIL Open Font License, Version 1.1 — https://openfontlicense.org
+
+This is the latin subset (unicode-range U+0000-00FF and the general-punctuation block),
+variable on the weight axis 100–1000, as served by Google Fonts. The identical file is
+already vendored in this repository at
+apps/editor/apps/web/public/fonts/rP2Yp2ywxg089UriI5-g4vlH9VoD8Cmcqbu0-K6z9mXg.woff2,
+declared by google-fonts.css; this copy exists so the component library does not reach
+across packages for an asset it needs at build time.
+
+WHY THIS FONT IS HERE
+---------------------
+It stands in for Pangea Text, Replika's licensed brand face, which the chat-bubble
+components were ported from. That font is NOT vendored: this repository is public and the
+terms for redistributing it here are unresolved. See src/lib/chat-font.ts for the metric
+comparison behind the choice, and NOTES.md (Stage 23) for the decision itself.
+
+The SIL OFL permits bundling and redistribution, including in a commercial product,
+provided the font is not sold on its own and this notice travels with it. The full licence
+text is at the URL above and ships with the upstream release at
+https://fonts.google.com/specimen/DM+Sans/license

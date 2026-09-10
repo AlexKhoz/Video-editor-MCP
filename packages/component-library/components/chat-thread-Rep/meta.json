@@ -1,0 +1,28 @@
+{
+  "id": "chat-thread-Rep",
+  "name": "Chat Thread Rep",
+  "description": "A Replika conversation playing out bubble by bubble, with typing dots timed to each reply's word count. Renders 9:16 (1080x1920) with a transparent background. Text renders in DM Sans, a metric-matched stand-in for the licensed Pangea Text.",
+  "project": "src/projects/chat-thread-Rep.ts",
+  "durationParam": "durationInSeconds",
+  "defaultWidth": 1080,
+  "defaultHeight": 1920,
+  "params": [
+    {
+      "key": "text",
+      "label": "Conversation",
+      "type": "text",
+      "default": "received: hey! how did it go?\nsent: better than I expected\nreceived: I knew it would",
+      "description": "One message per line (\"|\" also separates, for paths that drop newlines). Prefix each with \"received:\" or \"sent:\", or the short \"r:\" / \"s:\" - unprefixed lines alternate, starting with received. Doubling the colon escapes it: \"sent:: hi\" is a message reading \"sent: hi\". Blank lines are ignored, and a message wrapped entirely in *asterisks* is a roleplay action rendered italic. Typing dots are inserted automatically before every received message, timed from its word count - not a parameter."
+    },
+    {
+      "key": "durationInSeconds",
+      "label": "Duration (s)",
+      "type": "number",
+      "default": 8,
+      "min": 2,
+      "max": 60,
+      "step": 0.5,
+      "description": "Whole-thread length. The pauses, typing beats and the end hold stretch or compress to fit; each bubble's 240ms entrance does not, since the source is explicit that a slower arrival reads as broken. Set it below the sum of those fixed entrances and the clip overruns rather than rushing them."
+    }
+  ]
+}

@@ -14,6 +14,8 @@ export default defineConfig({
         "./src/projects/stat-counter.ts",
         "./src/projects/turbulent-background-Rep.ts",
         "./src/projects/orbit-headline-Rep.ts",
+        "./src/projects/chat-bubble-single-Rep.ts",
+        "./src/projects/chat-thread-Rep.ts",
       ],
       output: "./output",
     }),

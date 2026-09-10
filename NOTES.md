@@ -3112,3 +3112,129 @@ reverts. `computedHash` in the lockfile matches neither the as-is nor the LF-nor
 of the file, so it is not a plain content hash and cannot be used to argue that normalising is
 safe. If the CRLF ever becomes noisy, `.agents/skills/** -text` in `.gitattributes` is the fix,
 not a bulk rewrite.
+
+## Stage 23 — the chat bubble components
+
+`chat-bubble-single-Rep` and `chat-thread-Rep`, ported from ui-animation's balloon bubble and
+chat screen. Two things made this different from the earlier component work: the silhouette is
+real Bézier geometry rather than a rounded rectangle, and the bubble's size is an *input* to
+that geometry, so the text measurement had to be ported too.
+
+### The extraction report was mostly right, and wrong in five places
+
+Every constant was re-read from source before use. Confirmed: the seven shape knobs, the
+textbox block, padY 12/14, both palettes, the shadow, the 240ms entrance with its
+translateY/scale/origin, cubic-bezier(0.23, 1, 0.32, 1), the gaps, the typing formula, the dot
+sizes and wave. Wrong or missing:
+
+1. **Dot stagger is 0.184s, not 0.16s.** `STAGGER` is added to the *phase*
+   (`(t/PERIOD + i*STAGGER) % 1`), so the wall-clock offset is 0.16 x 1.15.
+2. **`MULTILINE_AT` is a height threshold**, `textH >= 2.5 x lineHeight`, not "3+ lines". The
+   source says why: it "stays honest when a line box renders taller than the nominal".
+3. **`HOLD_OUT = 1.6` was missing entirely** — it is part of the total duration, so a thread
+   built from the report alone finishes 1.6s early.
+4. **The sideCollapse framing was backwards.** With cornerInset 32 an axis collapses at 72px
+   or below, and a single-line bubble is ~45px tall, so collapsed-vertical is the NORMAL case
+   and a short bubble is a 4-anchor lens. The 8-anchor topology is the exception, not the rule.
+5. Missing details that fidelity needs: dot gap 5px, dot row 19px, and the `*action*` italic
+   convention (whole-message asterisks, stripped and italicised).
+
+Confirmed as asked: **there is no exit animation.** `enterStyle` returns an empty style once
+the entrance completes and nothing touches the bubble again, so the clip holds.
+
+### Fidelity by numeric identity, not by eye
+
+`buildBubble` was already pure maths, so it is ported nearly verbatim and the port is checked
+by *identity*: same (W, H) into both copies must give the same path string. Over a 420-pair
+grid covering all three topologies (130 four-anchor, 213 six, 77 eight) the path data and every
+read-out match **exactly**. Mutation-tested six ways — BETA_MAX, the collapse comparison, the
+arc-handle exponent, the corner-handle leg and the bow's driving dimension all diverge on
+15-170 pairs.
+
+The sixth mutation, **removing the convexity clamp, changed nothing** — so it was measured
+rather than assumed: instrumenting the source shows the clamp fires **0 times** across those
+420 shapes at the shipped `cornerHandle: 0.6`, and 1680 times at 3.0. It is a guard for
+parameter values this component never uses. Ported faithfully, permanently inert.
+
+The entrance curve is exact to the source (max error 0.0) and within 1.6e-13 of an independent
+200-iteration bisection — worth 1.6e-12 px of the 10px travel. The port earns its keep:
+easeOutQuint would be off by 0.017 and easeOutCubic by **0.198** of the span.
+
+### The measurement is the part that could silently be wrong
+
+The silhouette is drawn around the measured text box, so a wrap that differs from the browser's
+makes the shape wrong however exact the maths. The greedy wrap is reproduced with canvas
+`measureText`, including the source's deliberate `ceil(widest) + 1` subpixel guard. Checked
+against a real DOM element carrying the source's exact CSS: **line counts match on all 9
+strings**, including a mid-word break and the tight-fit case where the ported width (189) is
+narrower than the browser's unpinned box (220) and still wraps to the same two lines.
+
+Rendered pixels then agree with the geometry sub-pixel: analytic path extent 135.00 x 46.51
+against a measured bbox of 135.00 x 46.67. The vertical spill is *less* than the nominal
+sagitta because `edgeFullness: 0.4` flattens the bow to 40% of a true arc — expected, not drift.
+
+### Two implementation bugs worth recording
+
+- **`Path` does not centre where I assumed.** It subtracts `childrenBBox().center` from its
+  computed layout, and I read that as "the rect centre lands on the node position". It does
+  not: the first render put the silhouette a full half-size down-right of its own text. Fixed
+  by emitting pre-centred path data, which makes the bbox centre ~(0,0) and the question moot.
+- **`document.fonts.check()` returns true for a font that does not exist.** An earlier
+  `ensureFont` used it to skip redundant loads, so it skipped the load entirely and then failed
+  its own probe. It reports whether a query can be satisfied *somehow*, fallback included — the
+  one question not worth asking. The width probe is the real gate.
+
+### The font is a substitute, and the gate that proves it loaded
+
+Pangea Text is licensed and this repo is public, so it is **not** vendored. DM Sans (OFL 1.1)
+stands in, chosen by measurement: x-height 504 vs 505, cap 700 vs 700, `n` 574 vs 575 — the
+closest of the 46 weight-400 upright faces already in this repo. Same call orbit-headline-Rep
+makes for Widescreen-Bold. Registered under the private family name "DM Sans Rep" so a machine
+with DM Sans installed cannot mask a load failure. Swapping back is two constants in
+`chat-font.ts`.
+
+The render pipeline had **no font-readiness gate at all**, which is exactly how a missing face
+ships silently: the text renders in a fallback, every bubble measures differently, and the
+silhouette is drawn to match. `ensureFont` now awaits the face and then proves it by width
+probe. Both failure modes were tested by deliberately breaking them — a 404 URL, and a face
+registered under a name nothing asks for. Both throw with the font and URL named; the
+unmodified control still renders.
+
+Also worth knowing: `?url` imports do not work in this package — the Motion Canvas plugin turns
+them into a request that serves the raw binary as a module. Plain asset imports work.
+
+### Scale, and the one convention deliberately broken
+
+Everything is built at fontSize 16 (scale 1), where every constant is as tuned, and the whole
+node is then scaled to fill the frame. Raising fontSize would NOT enlarge the bubble: `maxWidth`
+is absolute by design in the source, so a bigger font wraps into more lines inside the same
+220px column.
+
+`durationInSeconds` stretches the pauses and the hold but **pins the 240ms entrance**, against
+this library's usual everything-scales-proportionally rule. The source's own comment settles it:
+UI motion stays under 300ms, and "a dropdown that takes 400ms feels broken". `paceFor` solves
+for the pace that lands the total on the requested duration given that fixed cost; asked for
+less than the entrances alone, it overruns rather than rushing them.
+
+### Verification
+
+| | result |
+|---|---|
+| 1. geometry | 420 pairs, path data and read-outs identical; 5/6 mutations caught, 6th proven inert |
+| 2. curve | exact to source (0.0); 1.6e-13 vs independent bisection; named easings off by 0.017 / 0.198 |
+| 3. colour and font | `#ffffff`/`#242433` and `#00004d`/`#ffffff` sampled exact from both senders; DM Sans renders; gate throws on both failure modes |
+| 4. thread timing | typing per-message at both clamps and between; whole timeline identical to the source's `buildTimeline` (delta 0) on 4 threads; 7/7 mutations caught; gaps measured 6.13/11.82/6.13 against 6/12/6; typing windows frames 20-62 and 95-137 against a computed 19-62 and 95-137 |
+| 5. generalization | 6 messages at 15s (452 frames) and 2 at 4s (122 frames), pipe separator, auto-alternation, italic action |
+| 6. standard checks | both in `GET /components` at 1080x1080 and 1080x1920, `-Rep` suffix, every param documented, delimiter scheme spelled out in the param description |
+
+Suites: render-service 26/26, mcp-server 15/15 (its catalogue guard test covers the new
+components), project-kit 27/27.
+
+One measurement artefact worth noting, since it looked like a bug: the typing-window detector
+first reported the dots appearing 4 frames late. The dots were on time — the detector required
+alpha >= 250 and an exact width, and during its own 240ms entrance the bubble is still fading
+and scaled to 0.94. The instrument was wrong, not the render.
+
+`tsc --noEmit` is not a usable gate in this package: the `?scene` / `?project` virtual modules
+and the JSX runtime produce the same errors for the three pre-existing scenes. The new files add
+no new error categories.

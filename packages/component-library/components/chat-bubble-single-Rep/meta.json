@@ -1,0 +1,35 @@
+{
+  "id": "chat-bubble-single-Rep",
+  "name": "Chat Bubble Single Rep",
+  "description": "One Replika chat bubble arriving on the house 240ms ease-out, with the balloon Bezier silhouette. Renders 1:1 (1080x1080) with a transparent background. Text renders in DM Sans, a metric-matched stand-in for the licensed Pangea Text.",
+  "project": "src/projects/chat-bubble-single-Rep.ts",
+  "durationParam": "durationInSeconds",
+  "defaultWidth": 1080,
+  "defaultHeight": 1080,
+  "params": [
+    {
+      "key": "text",
+      "label": "Message",
+      "type": "text",
+      "default": "Hey, are you around?",
+      "description": "The message. Wraps at the source's 220px column, so long text becomes a taller multi-line bubble. Wrap the whole message in *asterisks* for a roleplay action, which renders italic with the asterisks removed."
+    },
+    {
+      "key": "sender",
+      "label": "Sender",
+      "type": "text",
+      "default": "received",
+      "description": "\"received\" for one of hers - white bubble, dark text, left-aligned, growing from its bottom-left corner. \"sent\" for one of yours - deep indigo bubble, white text, right-aligned, growing from its bottom-right. Anything starting with \"s\" reads as sent; anything else as received."
+    },
+    {
+      "key": "durationInSeconds",
+      "label": "Duration (s)",
+      "type": "number",
+      "default": 2.5,
+      "min": 0.5,
+      "max": 30,
+      "step": 0.5,
+      "description": "Clip length. The entrance is a fixed 240ms whatever this is set to - the source is explicit that a slower arrival reads as broken - so the remaining time holds the settled bubble. There is no exit animation, because the source has none."
+    }
+  ]
+}
