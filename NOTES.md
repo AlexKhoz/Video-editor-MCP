@@ -3062,3 +3062,41 @@ Suites: render-service 26/26 (13 new), project-kit 27/27 with zero changed files
 The panel assertion first failed on names, expecting a `-MCP` suffix. The app was right: those
 fixtures were created over plain HTTP, not through MCP, so they correctly have no suffix. The
 assertion was wrong, not the grouping.
+
+## Installed tooling — animation design skills
+
+`npx skills add emilkowalski/skill` (2026-09-10). Emil Kowalski's motion/design-engineering
+skill pack, MIT-licensed, pure Markdown — no runtime dependency, nothing imported by any
+package, nothing in `package.json`.
+
+**What it is for:** a design/taste reference for the *next* Motion Canvas component we add to
+`packages/component-library` — easing-curve choice, duration heuristics, and above all the
+"should this animate at all" gate. It is a judgement aid, not a code generator for this repo:
+its recipes assume CSS/Framer Motion in a DOM, whereas our components are Motion Canvas
+generators rendered headless, so the *reasoning* transfers and the snippets do not.
+
+**Where it landed:** payload in `.agents/skills/<name>/`, with `.claude/skills/<name>` as a
+**symlink** into it. A lockfile `skills-lock.json` at the repo root pins each skill by source
+and content hash. 12 skills, 276 KB, all untracked so far.
+
+The six asked for are all present — `emil-design-eng`, `animate`, `review-animations`,
+`improve-animations`, `find-animation-opportunities`, `prototype` — plus six that came with
+the pack: `animate-expo`, `animation-vocabulary`, `apple-design`, `ask-sonner`,
+`pick-ui-library`, `write-swift`. The last three are irrelevant here (React Native, Sonner
+toasts, Swift); left in place rather than pruned, since deleting them would desync
+`skills-lock.json`.
+
+Two things to know before relying on it:
+
+- **Three are user-invoke-only.** `prototype`, `review-animations` and `pick-ui-library` carry
+  `disable-model-invocation: true`, so an agent cannot reach for them on its own — they run
+  only when you ask for them by name. The other nine can be picked up autonomously. Worth
+  knowing before wondering why a review did not happen: nobody asked for it.
+- **`.claude/skills/` holds symlinks, not files.** If these are ever committed, git stores the
+  link and a checkout on a machine without symlink support (Windows without Developer Mode)
+  gets a text file containing a path. Commit `.agents/skills/` plus `skills-lock.json` and let
+  `npx skills add` recreate the links, or commit real directories — don't assume the symlinks
+  survive a clone.
+
+Upstream is MIT, but the installed payload ships **no LICENSE file** of its own; the pinned
+hashes in `skills-lock.json` are the only provenance record on disk.
