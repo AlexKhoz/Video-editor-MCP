@@ -3077,7 +3077,10 @@ generators rendered headless, so the *reasoning* transfers and the snippets do n
 
 **Where it landed:** payload in `.agents/skills/<name>/`, with `.claude/skills/<name>` as a
 **symlink** into it. A lockfile `skills-lock.json` at the repo root pins each skill by source
-and content hash. 12 skills, 276 KB, all untracked so far.
+and content hash. 12 skills, 276 KB.
+
+`.agents/skills/` and `skills-lock.json` are **tracked**, so a fresh clone contains the skills
+rather than just this note. `.claude/skills/` is **gitignored** — see below.
 
 The six asked for are all present — `emil-design-eng`, `animate`, `review-animations`,
 `improve-animations`, `find-animation-opportunities`, `prototype` — plus six that came with
@@ -3092,11 +3095,20 @@ Two things to know before relying on it:
   `disable-model-invocation: true`, so an agent cannot reach for them on its own — they run
   only when you ask for them by name. The other nine can be picked up autonomously. Worth
   knowing before wondering why a review did not happen: nobody asked for it.
-- **`.claude/skills/` holds symlinks, not files.** If these are ever committed, git stores the
-  link and a checkout on a machine without symlink support (Windows without Developer Mode)
-  gets a text file containing a path. Commit `.agents/skills/` plus `skills-lock.json` and let
-  `npx skills add` recreate the links, or commit real directories — don't assume the symlinks
-  survive a clone.
+- **`.claude/skills/` holds symlinks, so it is gitignored.** Git would store the link itself,
+  and a checkout on a machine without symlink support (Windows without Developer Mode) turns
+  it into a text file containing a path — a skill directory that reads as one line of garbage.
+  Tracking the payload and the lockfile instead sidesteps that entirely: re-run
+  `npx skills add emilkowalski/skill` after a clone and it rebuilds the links from the pinned
+  hashes. That directory held nothing else, so ignoring it costs nothing.
 
 Upstream is MIT, but the installed payload ships **no LICENSE file** of its own; the pinned
 hashes in `skills-lock.json` are the only provenance record on disk.
+
+Committed **exactly as the installer wrote it**, which means CRLF — the only CRLF files in an
+otherwise LF repo. Deliberate: this is vendored third-party content that `npx skills add`
+rewrites wholesale on update, so normalising it would produce a diff the next install silently
+reverts. `computedHash` in the lockfile matches neither the as-is nor the LF-normalised sha256
+of the file, so it is not a plain content hash and cannot be used to argue that normalising is
+safe. If the CRLF ever becomes noisy, `.agents/skills/** -text` in `.gitattributes` is the fix,
+not a bulk rewrite.
